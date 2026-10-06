@@ -103,8 +103,12 @@ result.ids          # [12]
   days: `hrm.book(start="2026-10-06 14:00", end="2026-10-06 18:00", memory=20)`
   (naive times are Europe/Berlin).
 
-If one of several bookings fails, the ones already made are cancelled again,
-so you never end up with half a booking.
+If one of several bookings fails, the ones already made are cancelled again.
+If the server's answer is lost (a timeout, a dropped connection, or you
+interrupt the cell), the SDK looks the booking up and cancels it too, then
+re-raises the original error. Anything it could not cancel is named in a
+`RuntimeWarning`, and in that case it does not try another GPU; check
+`hrm.bookings()` and cancel what the warning names.
 
 ### Quick hold
 

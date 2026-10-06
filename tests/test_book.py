@@ -174,16 +174,113 @@ def test_failing_rollback_does_not_mask_original_error(fake, client):
     assert len(fake.requests_to("POST", "/api/claims/%d/cancel" % created_id)) == 1
 
 
-def test_orphan_warned_even_when_retry_succeeds(fake, client):
+def test_orphan_stops_retries_on_other_gpus(fake, client):
     d1 = today(fake)
     fake.script("POST", "/api/claims", None, times=1)
     fake.script("POST", "/api/claims", 409, {"error": "conflict", "detail": "race"}, times=1)
     orphan = fake._next_id
     fake.script("POST", "/api/claims/%d/cancel" % orphan, 503, {"error": "busy"})
     with pytest.warns(RuntimeWarning, match=r"hrm\.cancel\(%d\)" % orphan):
-        res = client.book(days=[d1, d1 + timedelta(days=2)], memory=48)
-    assert res.gpu == 4
+        with pytest.raises(Conflict, match="race"):
+            client.book(days=[d1, d1 + timedelta(days=2)], memory=48)
+    assert [b["gpu"] for b in posts(fake)] == [1, 1]  # no second live booking elsewhere
     assert live_claim(fake, orphan)["cancelled_at"] is None  # really orphaned
+
+
+# -- a POST whose response was lost after the server committed it --------------
+
+def made_since(fake, first_id):
+    return [c for c in fake.claims if c["id"] >= first_id]
+
+
+def test_lost_post_response_is_reconciled_and_cancelled(fake):
+    client = Client(fake.url, user="alice", clock=lambda: fake.now, timeout=0.3)
+    d1 = today(fake)
+    first_id = fake._next_id
+    fake.script("POST", "/api/claims", None, times=1)               # run 1: fine
+    fake.script("POST", "/api/claims", None, times=1, delay=1.0)    # run 2: committed, late
+    with pytest.raises(ServerUnavailable):
+        client.book(days=[d1, d1 + timedelta(days=2)], memory=48)
+    created = made_since(fake, first_id)
+    assert len(created) == 2  # the server did commit both runs
+    assert all(c["cancelled_at"] is not None for c in created)
+    assert len(posts(fake)) == 2  # no retry on another GPU
+    lookups = [r.query for r in fake.requests_to("GET", "/api/claims")]
+    assert lookups == [{"days": "14", "back": "1"}] * 2  # planning, then reconcile
+
+
+def test_ctrl_c_after_commit_is_reconciled(fake, client, monkeypatch):
+    d1 = today(fake)
+    first_id = fake._next_id
+    real_post = client._post_claim
+
+    def post(path, body):
+        result = real_post(path, body)
+        if path == "/api/claims":
+            raise KeyboardInterrupt  # the cell was interrupted as the reply arrived
+        return result
+
+    monkeypatch.setattr(client, "_post_claim", post)
+    with pytest.raises(KeyboardInterrupt):
+        client.book(days=[d1], memory=48)
+    [created] = made_since(fake, first_id)
+    assert created["cancelled_at"] is not None
+
+
+def test_reconcile_leaves_unrelated_and_preexisting_claims_alone(fake, client, monkeypatch):
+    d1 = today(fake)
+    earlier = client.book(days=[d1 + timedelta(days=2)], memory=1, note="x").bookings[0]
+    first_id = fake._next_id
+    real_post = client._post_claim
+
+    def post(path, body):
+        result = real_post(path, body)
+        if path == "/api/claims":
+            raise KeyboardInterrupt
+        return result
+
+    monkeypatch.setattr(client, "_post_claim", post)
+    with pytest.raises(KeyboardInterrupt):
+        client.book(days=[d1 + timedelta(days=2)], memory=1, note="x")
+    [created] = made_since(fake, first_id)
+    assert created["cancelled_at"] is not None
+    assert live_claim(fake, earlier.id)["cancelled_at"] is None  # same shape, not ours
+    cancels = [r.path for r in fake.requests if r.path.endswith("/cancel")]
+    assert cancels == ["/api/claims/%d/cancel" % created["id"]]
+
+
+def test_reconcile_lookup_failure_warns(fake):
+    client = Client(fake.url, user="alice", clock=lambda: fake.now, timeout=0.3)
+    d1 = today(fake)
+    first_id = fake._next_id
+    fake.script("GET", "/api/claims", None, times=1)  # planning read works
+    fake.script("GET", "/api/claims", 503, {"error": "busy"})  # the reconcile read fails
+    fake.script("POST", "/api/claims", None, times=1, delay=1.0)
+    with pytest.warns(RuntimeWarning, match=r"a booking for GPU 1 2026-10-06T16:37\+02:00"
+                      r"→2026-10-07T00:00\+02:00 may have been created; check "
+                      r"hrm\.bookings\(\) and cancel it"):
+        with pytest.raises(ServerUnavailable):
+            client.book(days=[d1], memory=48)
+    [created] = made_since(fake, first_id)
+    assert created["cancelled_at"] is None  # really left behind, but named in the warning
+
+
+def test_definitive_server_error_does_not_reconcile(fake, client):
+    fake.script("POST", "/api/claims", 400, {"error": "invalid", "detail": "nope"}, times=1)
+    with pytest.raises(InvalidRequest):
+        client.book(days=[today(fake)], memory=48)
+    gets = [r for r in fake.requests if r.method == "GET" and r.path == "/api/claims"]
+    assert len(gets) == 1  # only the planning read
+
+
+# -- days given as a single string -------------------------------------------------
+
+@pytest.mark.parametrize("days", ["2026-10-06", b"2026-10-06"])
+def test_days_as_single_string_is_type_error(fake, client, days):
+    with pytest.raises(TypeError, match=r"days must be a list of dates, "
+                                        r"e\.g\. days=\['2026-10-06'\]"):
+        client.book(days=days, memory=1)
+    assert posts(fake) == []
 
 
 def test_ctrl_c_during_second_window_rolls_back_first(fake, client, monkeypatch):

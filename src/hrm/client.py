@@ -9,12 +9,12 @@ import urllib.error
 import urllib.request
 import warnings
 from datetime import date, datetime, timezone
-from typing import Callable, Iterable, List, Optional, Union
+from typing import Callable, Iterable, List, Optional, Set, Union
 
 from . import __version__, planning
 from .errors import (Conflict, HRMError, NoCapacity, ServerUnavailable, UnknownUser,
                      error_for_status)
-from .models import Booking, BookingList, BookingResult, Usage
+from .models import BERLIN, Booking, BookingList, BookingResult, Usage
 
 DEFAULT_URL = "http://10.188.1.1:8765"
 MAX_ATTEMPTS = 3  # book(): POST attempts in total, across candidate GPUs
@@ -157,6 +157,8 @@ class Client:
         if memory is not None and not memory > 0:
             raise ValueError("memory must be > 0 GiB, got %r" % (memory,))
         now = self._clock()
+        if isinstance(days, (str, bytes)):
+            raise TypeError("days must be a list of dates, e.g. days=['2026-10-06']")
         if days is not None:
             day_list = planning.parse_days(days)
             if not day_list:
@@ -180,11 +182,16 @@ class Client:
         if not candidates:
             raise NoCapacity(self._no_capacity(cards, claims, windows, memory, gpu))
 
+        known_ids = {c.id for c in claims}  # existing bookings are never ours to reconcile
         conflict: Optional[Conflict] = None
         for index in candidates[:MAX_ATTEMPTS]:
+            orphans: List[str] = []
             try:
-                made = self._book_windows(index, windows, who, memory, note)
+                made = self._book_windows(index, windows, who, memory, note,
+                                          known_ids, orphans)
             except Conflict as e:  # a race: someone booked since we planned
+                if orphans:  # a rollback left a live booking: do not add another
+                    raise
                 conflict = e
                 continue
             return BookingResult(index, made)
@@ -192,9 +199,14 @@ class Client:
         raise conflict
 
     def _book_windows(self, gpu: int, windows: List[planning.Window], user: str,
-                      memory: Optional[float], note: Optional[str]) -> List[Booking]:
-        """POST every window on ``gpu``; on any failure cancel what was made, re-raise."""
+                      memory: Optional[float], note: Optional[str],
+                      known_ids: Set[int], orphans: List[str]) -> List[Booking]:
+        """POST every window on ``gpu``; on any failure cancel what was made, re-raise.
+
+        Anything the rollback could not cancel is warned about and named in
+        ``orphans``."""
         made: List[Booking] = []
+        in_flight: Optional[planning.Window] = None
         try:
             for start, end in windows:
                 body = {"user": user, "gpu": gpu,
@@ -203,18 +215,47 @@ class Client:
                     body["vram_gib"] = float(memory)
                 if note is not None:
                     body["note"] = note
+                in_flight = (start, end)
                 made.append(self._post_claim("/api/claims", body))
-        except BaseException:  # Ctrl-C too: never leave half a booking behind
+                in_flight = None
+        except BaseException as exc:  # Ctrl-C too: never leave half a booking behind
             for booking in made:  # best effort: never mask the original error
                 try:
                     self.cancel(booking)
                 except Exception:
+                    orphans.append("booking %d" % booking.id)
                     warnings.warn(
                         "could not cancel booking %d during rollback — cancel it manually: "
                         "hrm.cancel(%d)" % (booking.id, booking.id), RuntimeWarning,
                         stacklevel=3)
+            # No definitive answer from the server (timeout, reset, Ctrl-C...):
+            # the POST may have been committed even though we never saw it.
+            definitive = isinstance(exc, HRMError) and exc.status is not None
+            if in_flight is not None and not definitive:
+                skip = known_ids | {b.id for b in made}
+                self._reconcile(gpu, in_flight, user, note, skip, orphans)
             raise
         return made
+
+    def _reconcile(self, gpu: int, window: planning.Window, user: str,
+                   note: Optional[str], skip: Set[int], orphans: List[str]) -> None:
+        """Cancel a booking the server may have created for a POST whose answer
+        was lost; warn if that cannot be established or done."""
+        start, end = window
+        if note is not None and not note.strip():
+            note = None  # the server stores a blank note as null
+        try:
+            for b in self.bookings(days_ahead=14, days_back=1):
+                if (b.id not in skip and b.user == user and b.gpu == gpu
+                        and b.start == start and b.end == end and b.note == note):
+                    self.cancel(b)
+        except Exception:
+            orphans.append("GPU %d window" % gpu)
+            warnings.warn(
+                "a booking for GPU %d %s→%s may have been created; check hrm.bookings() "
+                "and cancel it" % (gpu, start.astimezone(BERLIN).isoformat(timespec="minutes"),
+                                   end.astimezone(BERLIN).isoformat(timespec="minutes")),
+                RuntimeWarning, stacklevel=4)
 
     @staticmethod
     def _no_capacity(cards, claims, windows, memory, gpu) -> str:
