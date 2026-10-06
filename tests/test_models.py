@@ -84,7 +84,7 @@ def test_error_for_status(status, cls):
 
 def test_error_detail_fallback_and_unknown():
     assert error_for_status(409, {"error": "conflict"}).detail == "conflict"
-    assert error_for_status(404, None).detail == ""
+    assert error_for_status(404, None).detail == "HTTP 404"  # no body: name the status
     e = error_for_status(418, {"error": "teapot"})
     assert type(e) is HRMError and e.status == 418
 

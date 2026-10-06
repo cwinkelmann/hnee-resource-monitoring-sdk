@@ -204,6 +204,14 @@ def test_malformed_url_is_hrmerror(url):
     assert "invalid server URL" in ei.value.detail
 
 
+@pytest.mark.parametrize("status,body", [(502, ""), (404, {}), (503, "<html>bad gateway</html>")])
+def test_error_without_detail_renders_http_status(fake, status, body):
+    fake.script("GET", "/api/users", status, body)
+    with pytest.raises(HRMError) as ei:
+        Client(fake.url).users()
+    assert str(ei.value) == "HTTP %d" % status
+
+
 @pytest.mark.parametrize("status", [500, 502])
 def test_5xx_is_server_unavailable(fake, status):
     fake.script("GET", "/api/users", status, {"error": "bad"})

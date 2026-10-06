@@ -12,6 +12,8 @@ class HRMError(Exception):
         self.detail = detail
 
     def __str__(self) -> str:
+        if not self.detail and self.status is not None:
+            return "HTTP %d" % self.status  # e.g. a bodyless 502 from a proxy
         return self.detail
 
 
@@ -50,7 +52,7 @@ class UnknownUser(HRMError):
 def error_for_status(status: int, body: Optional[dict]) -> HRMError:
     """Map an HTTP error status and decoded JSON body to an exception."""
     body = body if isinstance(body, dict) else {}
-    detail = body.get("detail") or body.get("error") or ""
+    detail = body.get("detail") or body.get("error") or "HTTP %d" % status
     if status in (400, 413, 415):
         cls = InvalidRequest
     elif status == 403:
