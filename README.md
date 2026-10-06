@@ -191,3 +191,7 @@ HRM_INTEGRATION=1 pytest tests/test_integration.py   # read-only checks against 
 
 The booking server and dashboard:
 [cwinkelmann/hnee-resource-monitoring](https://github.com/cwinkelmann/hnee-resource-monitoring).
+
+## License
+
+MIT, see [LICENSE](LICENSE).

@@ -8,6 +8,8 @@ dynamic = ["version"]
 description = "Python SDK for the HNEE GPU booking server"
 readme = "README.md"
 requires-python = ">=3.9"
+license = {text = "MIT"}
+classifiers = ["License :: OSI Approved :: MIT License"]
 dependencies = [
     "tzdata; sys_platform == \"win32\"",  # Windows ships no IANA time-zone data
 ]
