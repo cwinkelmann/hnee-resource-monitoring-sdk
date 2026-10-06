@@ -14,3 +14,13 @@ def load_fixture():
         return json.loads((FIXTURES / (name + ".json")).read_text())
 
     return _load
+
+
+@pytest.fixture
+def fake():
+    """A running fake booking server (see tests/fakeserver.py)."""
+    from fakeserver import FakeServer
+
+    server = FakeServer().start()
+    yield server
+    server.stop()
