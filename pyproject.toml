@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hnee-resource-monitoring"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Python SDK for the HNEE GPU booking server"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -15,6 +15,9 @@ dependencies = [
 [project.optional-dependencies]
 pandas = ["pandas>=1.5"]
 test = ["pytest>=7"]
+
+[tool.setuptools.dynamic]
+version = {attr = "hrm.__version__"}  # the single source: src/hrm/__init__.py
 
 [tool.setuptools.packages.find]
 where = ["src"]
