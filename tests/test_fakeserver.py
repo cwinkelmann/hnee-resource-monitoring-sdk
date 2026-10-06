@@ -17,7 +17,8 @@ def call(fake, method, path, body=None):
         with urllib.request.urlopen(req) as r:
             return r.status, json.loads(r.read())
     except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read())
+        with e:  # close it, or -W error trips on an unclosed-socket ResourceWarning
+            return e.code, json.loads(e.read())
 
 
 def post(fake, **kw):
@@ -87,6 +88,7 @@ def test_requires_json_content_type(fake):
     req = urllib.request.Request(fake.url + "/api/claims", method="POST", data=b"{}")
     with pytest.raises(urllib.error.HTTPError) as ei:
         urllib.request.urlopen(req)
+    ei.value.close()
     assert ei.value.code == 415
 
 

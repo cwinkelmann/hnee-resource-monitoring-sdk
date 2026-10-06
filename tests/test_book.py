@@ -167,9 +167,43 @@ def test_failing_rollback_does_not_mask_original_error(fake, client):
     fake.script("POST", "/api/claims", 400, {"error": "invalid", "detail": "nope"}, times=1)
     created_id = fake._next_id
     fake.script("POST", "/api/claims/%d/cancel" % created_id, 503, {"error": "busy"})
-    with pytest.raises(InvalidRequest, match="nope"):
-        client.book(days=[d1, d1 + timedelta(days=2)], memory=48)
+    with pytest.warns(RuntimeWarning, match=r"could not cancel booking %d during rollback"
+                      r" — cancel it manually: hrm\.cancel\(%d\)" % (created_id, created_id)):
+        with pytest.raises(InvalidRequest, match="nope"):
+            client.book(days=[d1, d1 + timedelta(days=2)], memory=48)
     assert len(fake.requests_to("POST", "/api/claims/%d/cancel" % created_id)) == 1
+
+
+def test_orphan_warned_even_when_retry_succeeds(fake, client):
+    d1 = today(fake)
+    fake.script("POST", "/api/claims", None, times=1)
+    fake.script("POST", "/api/claims", 409, {"error": "conflict", "detail": "race"}, times=1)
+    orphan = fake._next_id
+    fake.script("POST", "/api/claims/%d/cancel" % orphan, 503, {"error": "busy"})
+    with pytest.warns(RuntimeWarning, match=r"hrm\.cancel\(%d\)" % orphan):
+        res = client.book(days=[d1, d1 + timedelta(days=2)], memory=48)
+    assert res.gpu == 4
+    assert live_claim(fake, orphan)["cancelled_at"] is None  # really orphaned
+
+
+def test_ctrl_c_during_second_window_rolls_back_first(fake, client, monkeypatch):
+    d1 = today(fake)
+    real_post = client._post_claim
+    calls = []
+
+    def post(path, body):
+        if path == "/api/claims":
+            calls.append(body)
+            if len(calls) == 2:
+                raise KeyboardInterrupt
+        return real_post(path, body)
+
+    monkeypatch.setattr(client, "_post_claim", post)
+    with pytest.raises(KeyboardInterrupt):
+        client.book(days=[d1, d1 + timedelta(days=2)], memory=48)
+    first = fake.claims[-1]
+    assert first["gpu"] == 1 and first["cancelled_at"] is not None
+    assert len(calls) == 2  # no retry after Ctrl-C
 
 
 def test_first_window_server_error_raises_without_rollback(fake, client):

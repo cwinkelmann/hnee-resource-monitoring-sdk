@@ -7,6 +7,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+import warnings
 from datetime import date, datetime, timezone
 from typing import Callable, Iterable, List, Optional, Union
 
@@ -146,7 +147,10 @@ class Client:
              note: Optional[str] = None, user: Optional[str] = None) -> BookingResult:
         """Book ``memory`` GiB (None: the whole card) on one GPU for ``days``
         (Europe/Berlin dates) or for ``start``..``end``.  One booking per run
-        of consecutive days; the lowest-index GPU that fits is used."""
+        of consecutive days; the lowest-index GPU that fits is used.
+
+        Windows starting more than 14 days ahead are planned without claim
+        data (the server's window); the server still rejects conflicts."""
         has_range = start is not None or end is not None
         if (days is None) == (not has_range):
             raise ValueError("pass either days or start/end, not both")
@@ -200,12 +204,15 @@ class Client:
                 if note is not None:
                     body["note"] = note
                 made.append(self._post_claim("/api/claims", body))
-        except Exception:
+        except BaseException:  # Ctrl-C too: never leave half a booking behind
             for booking in made:  # best effort: never mask the original error
                 try:
                     self.cancel(booking)
                 except Exception:
-                    pass
+                    warnings.warn(
+                        "could not cancel booking %d during rollback — cancel it manually: "
+                        "hrm.cancel(%d)" % (booking.id, booking.id), RuntimeWarning,
+                        stacklevel=3)
             raise
         return made
 

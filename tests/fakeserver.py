@@ -90,10 +90,11 @@ class FakeServer:
         self._thread.join(timeout=5)
 
     # -- scripting -------------------------------------------------------
-    def script(self, method: str, path: str, status: int, body: Any = None,
+    def script(self, method: str, path: str, status: Optional[int], body: Any = None,
                times: Optional[int] = None, delay: float = 0.0) -> None:
         """Answer ``method path`` with ``status``/``body`` (``times`` times,
-        or forever when None); ``status=None`` means "handle normally".  ``body`` may be a str to send invalid JSON.
+        or forever when None); ``status=None`` means "handle normally".
+        ``body`` may be a str to send invalid JSON.
         ``delay`` sleeps first (for timeout tests)."""
         with self._lock:
             self._scripts.setdefault((method, path), []).append(

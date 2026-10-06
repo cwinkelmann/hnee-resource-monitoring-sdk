@@ -1,7 +1,6 @@
 """The module-level API delegates to the client made by connect()."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -40,8 +39,8 @@ def test_connect_replaces_default_client(fake):
 
 
 def test_module_book_uses_connected_client(fake):
-    fake.now = datetime.now(timezone.utc)  # module-level book uses the real clock
     hrm.connect(user="carol", url=fake.url)
+    hrm._default._clock = lambda: fake.now  # deterministic; one real-clock test lives in test_book
     res = hrm.book(days=[fake.now.astimezone(BERLIN).date()], memory=1, note="nb")
     assert isinstance(res, hrm.BookingResult)
     body = fake.requests_to("POST", "/api/claims")[0].body
