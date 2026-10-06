@@ -164,3 +164,44 @@ def test_best_effort():
     gpus = [(0, 1000), (1, 1000)]
     b = [bk(0, 800, t(10), t(12)), bk(1, 300, t(10), t(12))]
     assert best_effort(gpus, b, [(t(9), t(15))]) == (1, 700)
+
+
+def test_14_calendar_days_over_dst_exceeds_336h():
+    run = [date(2026, 10, 19) + timedelta(days=i) for i in range(14)]
+    with pytest.raises(ValueError, match="at most 14 days"):
+        windows_for_days(run, NOW)
+
+
+def test_window_from_start_in_past():
+    with pytest.raises(ValueError, match="start lies in the past"):
+        window_from(datetime(2026, 10, 6, 9, 0), datetime(2026, 10, 6, 12), NOW)
+
+
+def test_window_from_five_minute_grace():
+    s, _ = window_from(datetime(2026, 10, 6, 9, 26), datetime(2026, 10, 6, 12), NOW)
+    assert s == datetime(2026, 10, 6, 7, 26, tzinfo=UTC)
+
+
+def test_window_from_over_14_days():
+    with pytest.raises(ValueError, match="at most 14 days"):
+        window_from(datetime(2026, 10, 7), datetime(2026, 10, 21, 1), NOW)
+
+
+def test_berlin_midnight_boundary():
+    now = datetime(2026, 10, 6, 23, 30, tzinfo=UTC)  # 01:30 on 7 Oct in Berlin
+    with pytest.raises(ValueError, match="2026-10-06 is in the past"):
+        windows_for_days([d(6)], now)
+    (s, _), = windows_for_days([d(7)], now)
+    assert s == now
+
+
+def test_empty_inputs_raise():
+    w = [(t(9), t(15))]
+    with pytest.raises(ValueError, match="windows"):
+        choose_gpus([(0, 1000)], [], [], 100)
+    with pytest.raises(ValueError, match="gpus"):
+        choose_gpus([], [], w, 100)
+    with pytest.raises(ValueError, match="windows"):
+        best_effort([(0, 1000)], [], [])
+    with pytest.raises(ValueError, match="gpus"):
+        best_effort([], [], w)

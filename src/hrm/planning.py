@@ -58,7 +58,10 @@ def windows_for_days(days: List[date], now: datetime) -> List[Window]:
         start = max(now, _local_midnight(run[0]))
         end = _local_midnight(run[-1] + timedelta(days=1))
         assert end > start, "empty window"
-        windows.append((start.astimezone(timezone.utc), end.astimezone(timezone.utc)))
+        start, end = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+        if end - start > timedelta(days=MAX_DAYS):  # elapsed time, as the server checks
+            raise ValueError("a booking may last at most %d days" % MAX_DAYS)
+        windows.append((start, end))
     return windows
 
 
@@ -71,7 +74,12 @@ def window_from(start: datetime, end: datetime, now: datetime) -> Window:
     start, end = _aware(start), _aware(end)
     if end <= start:
         raise ValueError("end must be after start")
-    return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+    start, end = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+    if start < now - timedelta(minutes=5):
+        raise ValueError("start lies in the past")
+    if end - start > timedelta(days=MAX_DAYS):
+        raise ValueError("a booking may last at most %d days" % MAX_DAYS)
+    return start, end
 
 
 def free_mib_at_worst(
@@ -82,6 +90,13 @@ def free_mib_at_worst(
     instants = [start] + [b.start for b in mine if start < b.start < end]
     worst = max(sum(b.vram_mib for b in mine if b.active_at(t)) for t in instants)
     return total_mib - worst
+
+
+def _require(gpus, windows) -> None:
+    if not gpus:
+        raise ValueError("no gpus given")
+    if not windows:
+        raise ValueError("no windows given")
 
 
 def _min_free(gpu: Tuple[int, int], bookings, windows) -> int:
@@ -96,6 +111,7 @@ def choose_gpus(
     need_mib: Optional[int],
 ) -> List[int]:
     """GPUs that fit every window, ascending; need_mib=None means the whole card."""
+    _require(gpus, windows)
     out = []
     for g in sorted(gpus):
         free = _min_free(g, bookings, windows)
@@ -108,6 +124,7 @@ def best_effort(
     gpus: Sequence[Tuple[int, int]], bookings: Sequence[Booking], windows: Sequence[Window]
 ) -> Tuple[int, int]:
     """(index, min free MiB) of the GPU with the most room, for error messages."""
+    _require(gpus, windows)
     return max(
         ((g[0], _min_free(g, bookings, windows)) for g in sorted(gpus)),
         key=lambda x: x[1],
