@@ -1,0 +1,219 @@
+{
+ "ts": "2026-10-06T14:37:21.514426+00:00",
+ "age_s": 2.286301,
+ "stale": false,
+ "slack": "dry-run",
+ "gpus": [
+  {
+   "gpu": 0,
+   "total_mib": 81559,
+   "used_mib": 4,
+   "util_pct": 0,
+   "power_w": 66.09,
+   "bookings": [
+    {
+     "id": 7,
+     "user": "alice",
+     "gpu": 0,
+     "vram_mib": 81559,
+     "vram_gib": 79.6,
+     "start": "2026-10-06T14:06:30.818990+00:00",
+     "end": "2026-10-07T07:00:00+00:00",
+     "note": "quick booking",
+     "created_at": "2026-10-06T14:06:30.818990+00:00",
+     "created_ip": "192.0.2.10",
+     "cancelled_at": null,
+     "cancelled_ip": null,
+     "kind": "quick"
+    }
+   ],
+   "booked_mib": 81559,
+   "free_mib": 0,
+   "procs": []
+  },
+  {
+   "gpu": 1,
+   "total_mib": 81559,
+   "used_mib": 4,
+   "util_pct": 0,
+   "power_w": 67.02,
+   "bookings": [
+    {
+     "id": 10,
+     "user": "alice",
+     "gpu": 1,
+     "vram_mib": 30720,
+     "vram_gib": 30.0,
+     "start": "2026-10-06T14:18:00+00:00",
+     "end": "2026-10-07T14:18:00+00:00",
+     "note": null,
+     "created_at": "2026-10-06T14:18:05.203929+00:00",
+     "created_ip": "192.0.2.10",
+     "cancelled_at": null,
+     "cancelled_ip": null,
+     "kind": "calendar"
+    }
+   ],
+   "booked_mib": 30720,
+   "free_mib": 50839,
+   "procs": []
+  },
+  {
+   "gpu": 2,
+   "total_mib": 81559,
+   "used_mib": 74985,
+   "util_pct": 0,
+   "power_w": 121.56,
+   "bookings": [
+    {
+     "id": 8,
+     "user": "bob",
+     "gpu": 2,
+     "vram_mib": 81559,
+     "vram_gib": 79.6,
+     "start": "2026-10-06T14:12:28.349598+00:00",
+     "end": "2026-10-07T07:00:00+00:00",
+     "note": "quick booking",
+     "created_at": "2026-10-06T14:12:28.349598+00:00",
+     "created_ip": "192.0.2.10",
+     "cancelled_at": null,
+     "cancelled_ip": null,
+     "kind": "quick"
+    }
+   ],
+   "booked_mib": 81559,
+   "free_mib": 0,
+   "procs": [
+    {
+     "pid": 258336,
+     "user": "bob",
+     "name": "VLLM::Worker_TP0",
+     "used_mib": 74288
+    },
+    {
+     "pid": 260484,
+     "user": "bob",
+     "name": "python",
+     "used_mib": 682
+    }
+   ]
+  },
+  {
+   "gpu": 3,
+   "total_mib": 81559,
+   "used_mib": 74891,
+   "util_pct": 0,
+   "power_w": 117.6,
+   "bookings": [
+    {
+     "id": 9,
+     "user": "bob",
+     "gpu": 3,
+     "vram_mib": 81559,
+     "vram_gib": 79.6,
+     "start": "2026-10-06T14:12:30.957357+00:00",
+     "end": "2026-10-07T07:00:00+00:00",
+     "note": "quick booking",
+     "created_at": "2026-10-06T14:12:30.957357+00:00",
+     "created_ip": "192.0.2.10",
+     "cancelled_at": null,
+     "cancelled_ip": null,
+     "kind": "quick"
+    }
+   ],
+   "booked_mib": 81559,
+   "free_mib": 0,
+   "procs": [
+    {
+     "pid": 259166,
+     "user": "bob",
+     "name": "VLLM::Worker_TP1",
+     "used_mib": 74288
+    },
+    {
+     "pid": 260484,
+     "user": "bob",
+     "name": "python",
+     "used_mib": 588
+    }
+   ]
+  },
+  {
+   "gpu": 4,
+   "total_mib": 81559,
+   "used_mib": 0,
+   "util_pct": 0,
+   "power_w": 67.0,
+   "bookings": [],
+   "booked_mib": 0,
+   "free_mib": 81559,
+   "procs": []
+  },
+  {
+   "gpu": 5,
+   "total_mib": 81559,
+   "used_mib": 0,
+   "util_pct": 0,
+   "power_w": 71.66,
+   "bookings": [],
+   "booked_mib": 0,
+   "free_mib": 81559,
+   "procs": []
+  },
+  {
+   "gpu": 6,
+   "total_mib": 81559,
+   "used_mib": 0,
+   "util_pct": 0,
+   "power_w": 70.15,
+   "bookings": [
+    {
+     "id": 3,
+     "user": "carol",
+     "gpu": 6,
+     "vram_mib": 40960,
+     "vram_gib": 40.0,
+     "start": "2026-10-06T12:57:00+00:00",
+     "end": "2026-10-09T16:00:00+00:00",
+     "note": null,
+     "created_at": "2026-10-06T12:57:22.421941+00:00",
+     "created_ip": "192.0.2.10",
+     "cancelled_at": null,
+     "cancelled_ip": null,
+     "kind": "calendar"
+    }
+   ],
+   "booked_mib": 40960,
+   "free_mib": 40599,
+   "procs": []
+  },
+  {
+   "gpu": 7,
+   "total_mib": 81559,
+   "used_mib": 0,
+   "util_pct": 0,
+   "power_w": 70.1,
+   "bookings": [
+    {
+     "id": 4,
+     "user": "carol",
+     "gpu": 7,
+     "vram_mib": 40960,
+     "vram_gib": 40.0,
+     "start": "2026-10-06T12:57:00+00:00",
+     "end": "2026-10-09T16:00:00+00:00",
+     "note": null,
+     "created_at": "2026-10-06T12:57:25.544966+00:00",
+     "created_ip": "192.0.2.10",
+     "cancelled_at": null,
+     "cancelled_ip": null,
+     "kind": "calendar"
+    }
+   ],
+   "booked_mib": 40960,
+   "free_mib": 40599,
+   "procs": []
+  }
+ ],
+ "alerts": []
+}
