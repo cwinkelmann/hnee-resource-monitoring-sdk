@@ -163,3 +163,56 @@ def test_unknown_login_user(fake, monkeypatch):
     with pytest.raises(UnknownUser) as ei:
         Client(fake.url).resolve_user()
     assert "'stranger'" in ei.value.detail and "HRM_USER" in ei.value.detail
+
+
+# -- review fixes -------------------------------------------------------------
+def test_error_body_read_failure_still_maps_status(fake, monkeypatch):
+    import io
+    import urllib.error
+
+    class Broken(urllib.error.HTTPError):
+        def read(self, *a):
+            raise ConnectionResetError("reset while reading")
+
+    def boom(req, timeout=None):
+        raise Broken(req.full_url, 409, "Conflict", {}, io.BytesIO())
+
+    monkeypatch.setattr(client_mod.urllib.request, "urlopen", boom)
+    with pytest.raises(Conflict) as ei:
+        Client(fake.url).users()
+    assert ei.value.status == 409
+
+
+@pytest.mark.parametrize("path,body,call", [
+    ("/api/users", {"nope": 1}, lambda c: c.users()),
+    ("/api/users", {"users": 5}, lambda c: c.users()),
+    ("/api/claims", {"nope": 1}, lambda c: c.bookings()),
+    ("/api/claims", {"claims": [{"id": 1}]}, lambda c: c.bookings()),
+    ("/api/now", {"gpus": "x"}, lambda c: c.usage()),
+])
+def test_unexpected_shape_is_hrmerror(fake, path, body, call):
+    fake.script("GET", path, 200, body)
+    with pytest.raises(HRMError) as ei:
+        call(Client(fake.url))
+    assert "unexpected response shape" in ei.value.detail and path in ei.value.detail
+
+
+@pytest.mark.parametrize("url", ["http://[", "no-scheme-host:1"])
+def test_malformed_url_is_hrmerror(url):
+    with pytest.raises(HRMError) as ei:
+        Client(url).users()
+    assert "invalid server URL" in ei.value.detail
+
+
+@pytest.mark.parametrize("status", [500, 502])
+def test_5xx_is_server_unavailable(fake, status):
+    fake.script("GET", "/api/users", status, {"error": "bad"})
+    with pytest.raises(ServerUnavailable):
+        Client(fake.url).users()
+
+
+@pytest.mark.parametrize("kw", [{"days_ahead": 1, "days_back": 1},
+                                {"days_ahead": 14, "days_back": 30}])
+def test_range_boundaries_accepted(fake, kw):
+    Client(fake.url).bookings(**kw)
+    assert fake.requests[-1].query == {"days": str(kw["days_ahead"]), "back": str(kw["days_back"])}

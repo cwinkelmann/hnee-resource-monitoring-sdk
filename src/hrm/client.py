@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import getpass
 import http.client
 import json
@@ -13,6 +14,15 @@ from .errors import HRMError, ServerUnavailable, UnknownUser, error_for_status
 from .models import Booking, BookingList, Usage
 
 DEFAULT_URL = "http://10.188.1.1:8765"
+
+
+@contextlib.contextmanager
+def _shape(path: str):
+    """Turn parsing failures on a well-formed but wrongly shaped body into HRMError."""
+    try:
+        yield
+    except (KeyError, TypeError, ValueError, AttributeError):
+        raise HRMError("unexpected response shape from %s" % path) from None
 
 
 class Client:
@@ -33,16 +43,20 @@ class Client:
             data = json.dumps(body).encode()
             headers["Content-Type"] = "application/json"
         # urllib sends no Origin header; the server rejects cross-origin writes.
-        req = urllib.request.Request(self.url + path, data=data, headers=headers, method=method)
+        if not self.url.lower().startswith(("http://", "https://")):
+            raise HRMError("invalid server URL %r: must start with http:// or https://" % self.url)
         try:
+            req = urllib.request.Request(self.url + path, data=data, headers=headers, method=method)
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as e:
             try:
                 parsed = json.loads(e.read())
-            except ValueError:
-                parsed = None
+            except (ValueError, OSError, http.client.HTTPException):
+                parsed = None  # unreadable error body: still report the status
             raise error_for_status(e.code, parsed) from None
+        except ValueError as e:  # malformed URL: raised before any request is made
+            raise HRMError("invalid server URL %r: %s" % (self.url, e)) from None
         except urllib.error.URLError as e:
             raise ServerUnavailable(
                 "cannot reach %s: %s" % (self.url, e.reason), None) from None
@@ -58,10 +72,17 @@ class Client:
 
     # -- read API --------------------------------------------------------
     def users(self) -> List[str]:
-        return list(self._request("GET", "/api/users")["users"])
+        data = self._request("GET", "/api/users")
+        with _shape("/api/users"):
+            users = data["users"]
+            if not isinstance(users, list):
+                raise TypeError("users is not a list")
+            return list(users)
 
     def usage(self) -> Usage:
-        return Usage.from_json(self._request("GET", "/api/now"))
+        data = self._request("GET", "/api/now")
+        with _shape("/api/now"):
+            return Usage.from_json(data)
 
     def bookings(self, days_ahead: int = 14, days_back: int = 7,
                  include_cancelled: bool = False) -> BookingList:
@@ -70,7 +91,8 @@ class Client:
         if not 1 <= days_back <= 30:
             raise ValueError("days_back must be 1..30, got %r" % (days_back,))
         data = self._request("GET", "/api/claims?days=%d&back=%d" % (days_ahead, days_back))
-        found = [Booking.from_json(c) for c in data["claims"]]
+        with _shape("/api/claims"):
+            found = [Booking.from_json(c) for c in data["claims"]]
         return BookingList(b for b in found if include_cancelled or not b.cancelled)
 
     # -- user resolution -------------------------------------------------
