@@ -2,7 +2,7 @@
 
 Python SDK for the HNEE GPU booking server: see what the shared GPU box is
 doing, list bookings, and book or cancel GPU memory from Python or a notebook.
-Pure Python (3.9+), no required dependencies; pandas is optional.
+Pure Python (3.9+), no required dependencies (only `tzdata` on Windows); pandas is optional.
 
 ```python
 import hrm
@@ -28,6 +28,8 @@ With pandas, for the `.to_frame()` helpers:
 ```bash
 pip install "hnee-resource-monitoring[pandas] @ git+https://github.com/cwinkelmann/hnee-resource-monitoring-sdk"
 ```
+
+On Windows, pip also pulls in `tzdata` (the IANA time-zone data) automatically.
 
 In a notebook, use `%pip install ...` with the same argument. The package is
 called `hnee-resource-monitoring`; you import it as `hrm`.

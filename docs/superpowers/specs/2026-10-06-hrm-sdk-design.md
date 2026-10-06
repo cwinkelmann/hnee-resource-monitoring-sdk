@@ -13,7 +13,7 @@
 - **Success:** in a fresh notebook, `pip install git+https://github.com/cwinkelmann/hnee-resource-monitoring-sdk`, then `import hrm`. `usage()`, `bookings()`, `book(...)` and `cancel(...)` work against carrot.
 
 ## Constraints
-- Python ≥ 3.9 (`zoneinfo`). **No runtime dependencies.** pandas is an optional extra, used only by `.to_frame()`.
+- Python ≥ 3.9 (`zoneinfo`). **No runtime dependencies**, with one Windows-only exception: `tzdata; sys_platform == "win32"`, because the python.org Windows build ships no IANA time-zone data and `ZoneInfo("Europe/Berlin")` runs at import (amended after the final review, I2). pandas is an optional extra, used only by `.to_frame()`.
 - The default URL is `http://10.188.1.1:8765`, overridable with `HRM_URL` or `connect(url=…)`. **The repo is public: no credentials, no real user names or IPs in fixtures, docs or tests.** The fixtures are anonymised (alice, bob, carol, user04…, 192.0.2.10).
 - Talk to the server exactly as it expects:
   - JSON bodies with `Content-Type: application/json`;
