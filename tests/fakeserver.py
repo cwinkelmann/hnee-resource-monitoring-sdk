@@ -14,6 +14,8 @@ Usage (see the ``fake`` fixture in conftest.py)::
 Scripted responses win over the real handlers.  They are queued per route:
 each one is consumed in order (``times=None`` means "forever"); once the
 queue is empty the route falls back to the normal in-memory behaviour.
+A ``status`` of None queues a pass-through slot: that request is handled
+normally (e.g. to let the first POST of a sequence succeed and fail the second).
 """
 from __future__ import annotations
 
@@ -91,7 +93,7 @@ class FakeServer:
     def script(self, method: str, path: str, status: int, body: Any = None,
                times: Optional[int] = None, delay: float = 0.0) -> None:
         """Answer ``method path`` with ``status``/``body`` (``times`` times,
-        or forever when None).  ``body`` may be a str to send invalid JSON.
+        or forever when None); ``status=None`` means "handle normally".  ``body`` may be a str to send invalid JSON.
         ``delay`` sleeps first (for timeout tests)."""
         with self._lock:
             self._scripts.setdefault((method, path), []).append(
@@ -291,6 +293,8 @@ class FakeServer:
                 with fake._lock:
                     fake.requests.append(Recorded(method, parts.path, query, headers, body, raw))
                 script = fake._next_script(method, parts.path)
+                if script is not None and script["status"] is None:
+                    script = None  # pass-through slot
                 if script is not None:
                     if script["delay"]:
                         time.sleep(script["delay"])

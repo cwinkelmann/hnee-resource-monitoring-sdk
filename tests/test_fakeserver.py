@@ -88,3 +88,14 @@ def test_requires_json_content_type(fake):
     with pytest.raises(urllib.error.HTTPError) as ei:
         urllib.request.urlopen(req)
     assert ei.value.code == 415
+
+
+def test_scripted_passthrough_lets_a_request_through(fake):
+    # status=None queues a "handle normally" slot, so a later scripted error
+    # can hit the second request of a sequence.
+    fake.script("POST", "/api/claims", None, times=1)
+    fake.script("POST", "/api/claims", 400, {"error": "invalid", "detail": "x"}, times=1)
+    s, b = post(fake)
+    assert s == 201 and b["claim"]["gpu"] == 4
+    assert post(fake, gpu=5)[0] == 400
+    assert post(fake, gpu=5)[0] == 201

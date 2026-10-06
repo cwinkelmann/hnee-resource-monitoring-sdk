@@ -214,3 +214,28 @@ class BookingList(List[Booking]):
         ]
         cols = ["id", "user", "gpu", "vram_gib", "start", "end", "note", "kind", "cancelled"]
         return pd.DataFrame(rows, columns=cols)
+
+
+@dataclass(frozen=True)
+class BookingResult:
+    """What book() created: one booking per run of consecutive days, all on one GPU."""
+
+    gpu: int
+    bookings: List[Booking]
+
+    @property
+    def ids(self) -> List[int]:
+        return [b.id for b in self.bookings]
+
+    def __str__(self) -> str:
+        fmt = "%a %d %b %H:%M"
+        return "\n".join(
+            "booked GPU %d, %g GiB, %s → %s (Europe/Berlin), id %d" % (
+                b.gpu,
+                b.vram_gib,
+                b.start.astimezone(BERLIN).strftime(fmt),
+                b.end.astimezone(BERLIN).strftime(fmt),
+                b.id,
+            )
+            for b in self.bookings
+        )
