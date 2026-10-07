@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hnee-resource-monitoring"
+dynamic = ["version"]
+description = "Python SDK for the HNEE GPU booking server"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+classifiers = ["License :: OSI Approved :: MIT License"]
+dependencies = [
+    "tzdata; sys_platform == \"win32\"",  # Windows ships no IANA time-zone data
+]
+
+[project.optional-dependencies]
+pandas = ["pandas>=1.5"]
+test = ["pytest>=7"]
+
+[tool.setuptools.dynamic]
+version = {attr = "hrm.__version__"}  # the single source: src/hrm/__init__.py
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=6.31.0",
+]
