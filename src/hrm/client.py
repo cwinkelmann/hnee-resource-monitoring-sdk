@@ -15,6 +15,7 @@ from . import __version__, planning
 from .errors import (Conflict, HRMError, NoCapacity, ServerUnavailable, UnknownUser,
                      error_for_status)
 from .models import BERLIN, Booking, BookingList, BookingResult, Usage
+from .slots import Capacity, _check_shape
 
 DEFAULT_URL = "http://10.188.1.1:8765"
 MAX_ATTEMPTS = 3  # book(): POST attempts in total, across candidate GPUs
@@ -119,6 +120,24 @@ class Client:
         with _shape("/api/claims"):
             found = [Booking.from_json(c) for c in data["claims"]]
         return BookingList(b for b in found if include_cancelled or not b.cancelled)
+
+    def capacity(self, memory: Optional[float] = None, *, hours: float = 1.0,
+                 gpu: Optional[int] = None, count: int = 1) -> Capacity:
+        """What is free now, and when `memory` GiB would next fit for `hours`.
+
+        Ask this instead of summing bookings yourself: the server owns the
+        arithmetic, and clients that reimplemented it got it wrong.
+        """
+        _check_shape(memory, hours, count)
+        query = ["duration_minutes=%d" % max(int(round(hours * 60)), 1),
+                 "count=%d" % count]
+        if memory is not None:
+            query.append("vram_gib=%s" % memory)
+        if gpu is not None:
+            query.append("gpu=%d" % gpu)
+        data = self._request("GET", "/api/capacity?" + "&".join(query))
+        with _shape("/api/capacity"):
+            return Capacity.from_json(data)
 
     # -- user resolution -------------------------------------------------
     def resolve_user(self, explicit: Optional[str] = None) -> str:
