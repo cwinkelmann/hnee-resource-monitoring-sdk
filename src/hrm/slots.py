@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 import time
 
-from .errors import Conflict
+from .errors import Conflict, NotFound
 from .models import Booking, parse_time
 
 MIB_PER_GIB = 1024
@@ -151,3 +151,19 @@ class Slot:
             rest(poll)
             waited += poll
             self.refresh()
+
+    def release(self, end: Optional[Union[datetime, str]] = None) -> List[Dict[str, Any]]:
+        """Give every row of this slot back, and return the slots that moved earlier.
+
+        Safe on every path: this is what a job's `finally:` calls, so a slot that is
+        already cancelled, already over, or gone from the server is not an error
+        worth taking a job down for. Anything else -- a 500, an unreachable server --
+        still raises.
+        """
+        moved: List[Dict[str, Any]] = []
+        for booking in self.bookings:
+            try:
+                moved.extend(self.client.release_claim(booking.id, end)["advanced"])
+            except (NotFound, Conflict):
+                continue      # already cancelled, already over, or never existed
+        return moved

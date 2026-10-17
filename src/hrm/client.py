@@ -350,6 +350,24 @@ class Client:
             booking_id = int(booking_or_id)
         return self._post_claim("/api/claims/%d/cancel" % booking_id, {})
 
+    def release_claim(self, booking_or_id: Union[Booking, int],
+                      end: Optional[Union[datetime, str]] = None) -> dict:
+        """Give a booking back: one that has started has its end moved to `end`
+        (default now), so the window it really used stays on the calendar and in
+        the energy ledger; one that has not started is cancelled instead.
+
+        Returns {"claim": Booking|None, "advanced": [...]} -- the slots the server
+        pulled earlier because of this.
+        """
+        booking_id = booking_or_id.id if isinstance(booking_or_id, Booking) \
+            else int(booking_or_id)
+        body = {} if end is None else {"end": _iso(_to_datetime(end, "end"))}
+        data = self._request("POST", "/api/claims/%d/release" % booking_id, body)
+        with _shape("/api/claims/<id>/release"):
+            claim = data.get("claim")
+            return {"claim": None if claim is None else Booking.from_json(claim),
+                    "advanced": list(data.get("advanced") or [])}
+
     def hold(self, gpu: int, user: Optional[str] = None) -> Booking:
         """Quick hold: the whole card from now until the next 09:00 Berlin."""
         return self._post_claim("/api/claims/quick",

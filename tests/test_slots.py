@@ -264,3 +264,80 @@ def test_refresh_keeps_the_rows_when_the_server_forgets_them():
     stub = StubClient([], T_START)
     slot = hrm.Slot(stub, [row], assigned_later=False)
     assert slot.refresh().id == row.id
+
+
+# --- releasing ---------------------------------------------------------------------
+def _released(**over):
+    row = dict(SLOT_BODY["claim"])
+    row.update(over)
+    return {"claim": row, "advanced": []}
+
+
+def _reserved(client, fake):
+    fake.script("POST", "/api/claims", 201, SLOT_BODY)
+    return client.reserve(memory=19.5, hours=1)
+
+
+def test_release_truncates_and_sends_no_end_by_default(client, fake):
+    slot = _reserved(client, fake)
+    fake.script("POST", "/api/claims/11/release", 200,
+                _released(end="2026-10-17T10:20:00+00:00"))
+    assert slot.release() == []
+    assert fake.requests_to("POST", "/api/claims/11/release")[-1].body == {}
+
+
+def test_release_passes_an_explicit_end_through(client, fake):
+    slot = _reserved(client, fake)
+    fake.script("POST", "/api/claims/11/release", 200, _released())
+    slot.release(end="2026-10-17T10:30:00+00:00")
+    body = fake.requests_to("POST", "/api/claims/11/release")[-1].body
+    assert body["end"].startswith("2026-10-17T10:30:00")
+
+
+def test_release_reports_the_slots_it_advanced(client, fake):
+    slot = _reserved(client, fake)
+    fake.script("POST", "/api/claims/11/release", 200,
+                {"claim": SLOT_BODY["claim"],
+                 "advanced": [{"id": 99, "user": "alice", "gpu": 0,
+                               "old_start": "2026-10-17T17:00:00+00:00",
+                               "new_start": "2026-10-17T11:00:00+00:00"}]})
+    assert [m["id"] for m in slot.release()] == [99]
+
+
+def test_release_releases_every_row_of_a_group(client, fake):
+    fake.script("POST", "/api/claims", 201, _group_body(3))
+    slot = client.reserve(memory=1, hours=1, count=3)
+    for row in slot.bookings:
+        fake.script("POST", "/api/claims/%d/release" % row.id, 200, _released(id=row.id))
+    slot.release()
+    for row in slot.bookings:
+        assert fake.requests_to("POST", "/api/claims/%d/release" % row.id)
+
+
+@pytest.mark.parametrize("status,body", [
+    (404, {"error": "not found"}),
+    (409, {"error": "conflict", "detail": "already cancelled"}),
+    (409, {"error": "conflict", "detail": "booking is over"}),
+])
+def test_release_is_safe_on_a_slot_that_is_already_gone(client, fake, status, body):
+    """It runs from a finally: block on every path, including ones where the slot has
+    already been cancelled, already ended, or never existed."""
+    slot = _reserved(client, fake)
+    fake.script("POST", "/api/claims/11/release", status, body)
+    assert slot.release() == []
+
+
+def test_release_lets_a_real_error_through(client, fake):
+    slot = _reserved(client, fake)
+    fake.script("POST", "/api/claims/11/release", 500, {"error": "internal"})
+    with pytest.raises(hrm.ServerUnavailable):
+        slot.release()
+
+
+def test_release_twice_is_two_harmless_calls(client, fake):
+    slot = _reserved(client, fake)
+    fake.script("POST", "/api/claims/11/release", 200, _released())
+    fake.script("POST", "/api/claims/11/release", 409,
+                {"error": "conflict", "detail": "already cancelled"})
+    slot.release()
+    slot.release()
