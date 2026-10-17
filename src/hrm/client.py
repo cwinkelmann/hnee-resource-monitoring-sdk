@@ -93,6 +93,8 @@ class Client:
                 "cannot reach %s: %s" % (self.url, e.reason), None) from None
         except (OSError, http.client.HTTPException) as e:  # timeouts, resets mid-read
             raise ServerUnavailable("cannot reach %s: %s" % (self.url, e), None) from None
+        if not raw:
+            return {}        # 204 No Content: nothing happened, and that is an answer
         try:
             parsed = json.loads(raw)
         except ValueError:
@@ -367,6 +369,23 @@ class Client:
             claim = data.get("claim")
             return {"claim": None if claim is None else Booking.from_json(claim),
                     "advanced": list(data.get("advanced") or [])}
+
+    def watch_claim(self, booking_or_id: Union[Booking, int],
+                    timeout: float = 90.0) -> Optional[dict]:
+        """One long-poll on a booking: block until something happens to it.
+
+        Returns the event, or None if the server's hold expired with nothing to say
+        (HTTP 204) -- then call it again. The timeout must exceed the server's hold
+        (60 s), or every call would look like a network failure.
+        """
+        booking_id = booking_or_id.id if isinstance(booking_or_id, Booking) \
+            else int(booking_or_id)
+        was, self.timeout = self.timeout, timeout
+        try:
+            data = self._request("GET", "/api/claims/%d/events" % booking_id)
+        finally:
+            self.timeout = was
+        return data or None
 
     def hold(self, gpu: int, user: Optional[str] = None) -> Booking:
         """Quick hold: the whole card from now until the next 09:00 Berlin."""

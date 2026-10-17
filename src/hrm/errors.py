@@ -49,6 +49,18 @@ class UnknownUser(HRMError):
     """Raised by the client when the user cannot be resolved."""
 
 
+class Preempted(HRMError):
+    """An important booking took this slot's card. Checkpoint and stop.
+
+    ``event`` is the server's payload: how much was lost, by whom, and whether the
+    row was truncated or cancelled.
+    """
+
+    def __init__(self, detail: str = "", event: Optional[dict] = None) -> None:
+        super().__init__(detail)
+        self.event = event or {}
+
+
 def error_for_status(status: int, body: Optional[dict]) -> HRMError:
     """Map an HTTP error status and decoded JSON body to an exception."""
     body = body if isinstance(body, dict) else {}

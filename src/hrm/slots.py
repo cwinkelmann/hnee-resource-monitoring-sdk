@@ -11,10 +11,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Union
 
+import logging
+import threading
 import time
 
-from .errors import Conflict, NotFound
+from .errors import Conflict, NotFound, Preempted
 from .models import Booking, parse_time
+
+log = logging.getLogger("hrm.slots")
 
 MIB_PER_GIB = 1024
 MAX_HOURS = 14 * 24
@@ -63,6 +67,82 @@ class Capacity:
         )
 
 
+class Watcher:
+    """Parks one long-poll per row of a slot, in daemon threads.
+
+    The threads only ever *set* things; the job asks at a safe point with
+    Slot.check(). Raising into another thread is not something Python does
+    reliably, and the middle of a CUDA kernel is not where anyone wants to
+    checkpoint.
+    """
+
+    def __init__(self, slot: "Slot",
+                 on_taken: Optional[Callable[[Dict[str, Any]], None]] = None) -> None:
+        self.slot = slot
+        self.on_taken = on_taken
+        self._stop = threading.Event()
+        self._threads: List[threading.Thread] = []
+        self._live = 0
+        self._lock = threading.Lock()
+
+    @property
+    def watching(self) -> bool:
+        """True while at least one long-poll is parked. A server with no /events
+        route leaves this False, and the job runs on unwatched."""
+        with self._lock:
+            return self._live > 0
+
+    def __enter__(self) -> "Watcher":
+        for booking in self.slot.bookings:
+            thread = threading.Thread(target=self._loop, args=(booking.id,),
+                                      name="hrm-watch-%d" % booking.id, daemon=True)
+            with self._lock:
+                self._live += 1
+            self._threads.append(thread)
+            thread.start()
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        self.stop()
+        return False
+
+    def stop(self) -> None:
+        self._stop.set()
+        for thread in self._threads:
+            thread.join(timeout=5.0)
+        self._threads = []
+
+    def _loop(self, booking_id: int) -> None:
+        try:
+            while not self._stop.is_set():
+                try:
+                    event = self.slot.client.watch_claim(booking_id)
+                except NotFound:
+                    log.warning("this server has no /events route for booking %d; "
+                                "running unwatched", booking_id)
+                    return
+                except Conflict:
+                    return              # cancelled or over: there is nothing to watch
+                except Exception as exc:        # a blip, a restart, a timeout
+                    log.warning("watch on booking %d failed (%s); retrying",
+                                booking_id, exc.__class__.__name__)
+                    if self._stop.wait(5.0):
+                        return
+                    continue
+                if event is None:
+                    continue            # 204: the hold expired, so reconnect
+                self.slot._record_taken(event)
+                if self.on_taken is not None:
+                    try:
+                        self.on_taken(event)
+                    except Exception:
+                        log.exception("on_taken callback raised")
+                return
+        finally:
+            with self._lock:
+                self._live -= 1
+
+
 class Slot:
     """One reserved window, over one card or several.
 
@@ -79,6 +159,8 @@ class Slot:
         self.bookings = sorted(bookings, key=lambda b: (b.start, b.id))
         self.assigned_later = bool(assigned_later)
         self.revoked = list(revoked or [])
+        self.taken: Optional[Dict[str, Any]] = None   # set by a Watcher, read by check()
+        self.watcher: Optional[Watcher] = None
 
     def __repr__(self) -> str:
         return "Slot(ids=%r, gpus=%r, %s..%s)" % (
@@ -167,3 +249,33 @@ class Slot:
             except (NotFound, Conflict):
                 continue      # already cancelled, already over, or never existed
         return moved
+
+    # --- being told the card was taken ---------------------------------------------
+    def _record_taken(self, event: Dict[str, Any]) -> None:
+        self.taken = event
+
+    @property
+    def watcher_parked(self) -> bool:
+        """Is anyone actually listening for this slot right now? The server reads the
+        same fact from its end, and only honours a declared notice while it holds."""
+        return self.watcher is not None and self.watcher.watching
+
+    def watch(self, on_taken: Optional[Callable[[Dict[str, Any]], None]] = None
+              ) -> Watcher:
+        """Park a long-poll per row, so the server can say in milliseconds that an
+        important booking took the card.
+
+            with slot.watch():
+                for epoch in range(100):
+                    slot.check()        # raises Preempted once it is taken
+                    train_one_epoch()
+        """
+        self.watcher = Watcher(self, on_taken)
+        return self.watcher
+
+    def check(self) -> None:
+        """Raise Preempted if the card has been taken. Call it where stopping is
+        safe -- between epochs, after a checkpoint."""
+        if self.taken is not None:
+            by = ", ".join(self.taken.get("by") or []) or "someone"
+            raise Preempted("GPU %d was taken by %s" % (self.gpu, by), self.taken)

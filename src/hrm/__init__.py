@@ -14,9 +14,10 @@ from typing import Iterable, List, Optional, Union  # noqa: E402
 
 from .client import Client  # noqa: E402
 from .errors import (Conflict, Forbidden, HRMError, InvalidRequest, NoCapacity,  # noqa: E402
-                     NotFound, RateLimited, ServerUnavailable, UnknownUser)
+                     NotFound, Preempted, RateLimited, ServerUnavailable,
+                     UnknownUser)
 from .gate import Lease, gate  # noqa: E402
-from .slots import Capacity, Slot  # noqa: E402
+from .slots import Capacity, Slot, Watcher  # noqa: E402
 from .models import (Alert, Booking, BookingList, BookingResult, Gpu, Process,  # noqa: E402
                      Usage)
 
@@ -24,6 +25,7 @@ __all__ = [
     "__version__",
     "connect", "users", "usage", "bookings", "book", "cancel", "hold", "release",
     "capacity", "reserve", "gate", "Client", "Lease", "Capacity", "Slot",
+    "Watcher", "Preempted",
     "Alert", "Booking", "BookingList", "BookingResult", "Gpu", "Process", "Usage",
     "HRMError", "InvalidRequest", "Forbidden", "NotFound", "Conflict", "RateLimited",
     "ServerUnavailable", "NoCapacity", "UnknownUser",
