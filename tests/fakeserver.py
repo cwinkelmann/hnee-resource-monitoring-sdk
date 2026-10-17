@@ -314,8 +314,11 @@ class FakeServer:
                         status, payload = fake._route(method, parts.path, query, body)
                 if hold_back:
                     time.sleep(hold_back)
-                data = payload if isinstance(payload, str) else json.dumps(payload)
-                data = data.encode()
+                # A None payload means "no content": a 204 that still carried
+                # json.dumps(None) would put four bytes after a bodyless status and
+                # desync the next response on a keep-alive connection.
+                data = b"" if payload is None else (
+                    payload if isinstance(payload, str) else json.dumps(payload)).encode()
                 try:
                     self.send_response(status)
                     self.send_header("Content-Type", "application/json")
