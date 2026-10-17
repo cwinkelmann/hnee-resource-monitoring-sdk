@@ -15,7 +15,7 @@ from . import __version__, planning
 from .errors import (Conflict, HRMError, NoCapacity, ServerUnavailable, UnknownUser,
                      error_for_status)
 from .models import BERLIN, Booking, BookingList, BookingResult, Usage
-from .slots import Capacity, _check_shape
+from .slots import Capacity, Slot, _check_shape
 
 DEFAULT_URL = "http://10.188.1.1:8765"
 MAX_ATTEMPTS = 3  # book(): POST attempts in total, across candidate GPUs
@@ -37,6 +37,11 @@ def _to_datetime(value: Union[datetime, str], name: str) -> datetime:
         except ValueError:
             pass
     raise ValueError("bad %s %r, expected a datetime or ISO string" % (name, value))
+
+
+def _iso(t: datetime) -> str:
+    """An aware datetime as the server wants it: UTC with an offset."""
+    return t.astimezone(timezone.utc).isoformat()
 
 
 @contextlib.contextmanager
@@ -138,6 +143,49 @@ class Client:
         data = self._request("GET", "/api/capacity?" + "&".join(query))
         with _shape("/api/capacity"):
             return Capacity.from_json(data)
+
+    def reserve(self, memory: Optional[float] = None, *, hours: float = 1.0,
+                gpu: Optional[int] = None, count: int = 1,
+                auto_advance: bool = True,
+                not_later_than: Optional[Union[datetime, str]] = None,
+                notice_seconds: Optional[int] = None, important: bool = False,
+                note: Optional[str] = None, user: Optional[str] = None) -> Slot:
+        """Reserve `memory` GiB for `hours`, starting as soon as it fits.
+
+        This does not fail for lack of capacity: the server answers with a window,
+        and `slot.assigned_later` says whether it starts now or later. Wait for it
+        with `slot.wait_until_start()`, and give it back with `slot.release()`.
+
+        `notice_seconds=0` promises you will be off the card at once if an important
+        booking wants it -- the server honours that only while a watcher is parked,
+        and it can never buy more notice than the box's grace period.
+        """
+        _check_shape(memory, hours, count)
+        if notice_seconds is not None and (isinstance(notice_seconds, bool)
+                                           or not isinstance(notice_seconds, int)
+                                           or notice_seconds < 0):
+            raise ValueError("notice_seconds must be a whole number of seconds, 0 or "
+                             "more, got %r" % (notice_seconds,))
+        body = {"user": self.resolve_user(user), "count": count,
+                "duration_minutes": max(int(round(hours * 60)), 1),
+                "auto_advance": bool(auto_advance),
+                "priority": "important" if important else "lendable"}
+        if memory is not None:
+            body["vram_gib"] = memory
+        if gpu is not None:
+            body["gpu"] = gpu
+        if note is not None:
+            body["note"] = note
+        if notice_seconds is not None:
+            body["notice_seconds"] = notice_seconds
+        if not_later_than is not None:
+            body["not_later_than"] = _iso(_to_datetime(not_later_than, "not_later_than"))
+        data = self._request("POST", "/api/claims", body)
+        with _shape("/api/claims"):
+            rows = data.get("claims") or [data["claim"]]
+            return Slot(self, [Booking.from_json(c) for c in rows],
+                        bool(data.get("assigned_later", False)),
+                        data.get("revoked"))
 
     # -- user resolution -------------------------------------------------
     def resolve_user(self, explicit: Optional[str] = None) -> str:
