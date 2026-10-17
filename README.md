@@ -15,7 +15,8 @@ hrm.cancel(result.bookings[0])
 ```
 
 A full walk-through with real (anonymised) output is in
-[`examples/quickstart.ipynb`](examples/quickstart.ipynb).
+[`examples/quickstart.ipynb`](examples/quickstart.ipynb), with the rest listed in
+[`examples/README.md`](examples/README.md).
 
 ## Install via pip directly from GitHub
 
