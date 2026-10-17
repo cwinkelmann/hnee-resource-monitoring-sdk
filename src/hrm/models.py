@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -57,6 +57,12 @@ class Booking:
     cancelled_at: Optional[datetime]
     cancelled_ip: Optional[str]
     kind: str
+    priority: str = "lendable"              # "lendable" or "important"
+    auto_advance: bool = False              # may the server move this booking earlier?
+    group_id: Optional[str] = None          # members of one atomic group share it
+    notice_seconds: Optional[int] = None    # warning its owner needs before losing the card
+    # Where an important booking holds this one's VRAM: {start, end, vram_mib, by}.
+    taken: List[Dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, d: Dict[str, Any]) -> "Booking":
@@ -73,6 +79,12 @@ class Booking:
             cancelled_at=_opt_time(d.get("cancelled_at")),
             cancelled_ip=d.get("cancelled_ip"),
             kind=d.get("kind", "calendar"),
+            # All five default, so a body from a server that predates schema v4 parses.
+            priority=d.get("priority", "lendable"),
+            auto_advance=bool(d.get("auto_advance", False)),
+            group_id=d.get("group_id"),
+            notice_seconds=d.get("notice_seconds"),
+            taken=list(d.get("taken") or []),
         )
 
     @property
