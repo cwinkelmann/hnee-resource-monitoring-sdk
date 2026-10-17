@@ -11,6 +11,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Union
 
+import time
+
+from .errors import Conflict
 from .models import Booking, parse_time
 
 MIB_PER_GIB = 1024
@@ -109,3 +112,42 @@ class Slot:
     @property
     def memory_gib(self) -> float:
         return round(self.bookings[0].vram_mib / MIB_PER_GIB, 2)
+
+    @property
+    def cancelled(self) -> bool:
+        """True once every row of this slot is cancelled."""
+        return all(b.cancelled_at is not None for b in self.bookings)
+
+    def refresh(self) -> "Slot":
+        """Re-read this slot's rows. The server may have moved them earlier, and a
+        slot the server no longer lists keeps the rows we already have."""
+        ids = {b.id for b in self.bookings}
+        found = [b for b in self.client.bookings(include_cancelled=True)
+                 if b.id in ids]
+        if found:
+            self.bookings = sorted(found, key=lambda b: (b.start, b.id))
+        return self
+
+    def wait_until_start(self, poll: float = 10.0, timeout: Optional[float] = None,
+                         sleep: Optional[Callable[[float], None]] = None) -> "Slot":
+        """Block until the slot's window has begun, then return self.
+
+        Re-reads the rows on every tick, so a slot that moves earlier shortens the
+        wait. Raises Conflict if the slot is cancelled under us -- otherwise a job
+        would wait for a window that no longer exists -- and TimeoutError if
+        `timeout` seconds pass first.
+        """
+        rest = sleep or time.sleep
+        waited = 0.0
+        while True:
+            if self.cancelled:
+                raise Conflict("slot %d was cancelled while waiting for its start"
+                               % self.id)
+            if self.start <= self.client.now():
+                return self
+            if timeout is not None and waited >= timeout:
+                raise TimeoutError("slot %d still starts at %s after %.0fs"
+                                   % (self.id, self.start.isoformat(), waited))
+            rest(poll)
+            waited += poll
+            self.refresh()

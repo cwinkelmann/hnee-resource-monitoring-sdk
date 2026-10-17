@@ -1,7 +1,7 @@
 """Slot and Capacity: the client-side half. The contract lives in test_live.py."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -163,3 +163,104 @@ def test_reserve_is_on_the_module_too(fake):
     fake.script("POST", "/api/claims", 201, SLOT_BODY)
     hrm.connect(user="cwinkelmann", url=fake.url)
     assert hrm.reserve(memory=1, hours=1).id == 11
+
+
+# --- waiting -----------------------------------------------------------------------
+# wait_until_start() is pure polling over client.bookings() and client.now(), so these
+# drive a stub client: no HTTP, no clock to race, and the tick count is an assertion.
+class StubClient:
+    def __init__(self, rows, now):
+        self._rows = list(rows)
+        self._now = now
+        self.reads = 0
+
+    def bookings(self, include_cancelled=False):
+        self.reads += 1
+        return list(self._rows)
+
+    def now(self):
+        return self._now
+
+    def set(self, rows=None, now=None):
+        if rows is not None:
+            self._rows = list(rows)
+        if now is not None:
+            self._now = now
+
+
+def _row(**over):
+    d = dict(SLOT_BODY["claim"])
+    d.update(over)
+    return hrm.Booking.from_json(d)
+
+
+T_START = datetime(2026, 10, 17, 10, 0, tzinfo=timezone.utc)
+
+
+def test_waiting_for_a_slot_that_already_started_returns_at_once():
+    row = _row()
+    stub = StubClient([row], T_START)
+    slot = hrm.Slot(stub, [row], assigned_later=False)
+    slept = []
+    assert slot.wait_until_start(sleep=slept.append) is slot
+    assert slept == []
+
+
+def test_waiting_polls_until_the_start_arrives():
+    row = _row()
+    stub = StubClient([row], T_START - timedelta(minutes=20))
+    slot = hrm.Slot(stub, [row], assigned_later=True)
+    ticks = []
+
+    def sleep(seconds):
+        ticks.append(seconds)
+        stub.set(now=stub.now() + timedelta(minutes=10))
+    slot.wait_until_start(poll=5, sleep=sleep)
+    assert ticks == [5, 5]
+    assert stub.reads == 2                     # it re-reads on every tick
+
+
+def test_waiting_notices_the_slot_moved_earlier():
+    row = _row(start="2026-10-17T18:00:00+00:00", end="2026-10-17T19:00:00+00:00")
+    stub = StubClient([row], T_START)
+    slot = hrm.Slot(stub, [row], assigned_later=True)
+    far = slot.start
+
+    def sleep(_seconds):
+        stub.set(rows=[_row()])                # someone released early
+    slot.wait_until_start(poll=5, sleep=sleep)
+    assert slot.start < far
+    assert slot.start == T_START
+
+
+def test_a_cancelled_slot_stops_the_wait_with_a_conflict():
+    row = _row(start="2026-10-17T18:00:00+00:00", end="2026-10-17T19:00:00+00:00")
+    stub = StubClient([row], T_START)
+    slot = hrm.Slot(stub, [row], assigned_later=True)
+
+    def sleep(_seconds):
+        stub.set(rows=[_row(start="2026-10-17T18:00:00+00:00",
+                            end="2026-10-17T19:00:00+00:00",
+                            cancelled_at="2026-10-17T10:05:00+00:00")])
+    with pytest.raises(hrm.Conflict):
+        slot.wait_until_start(poll=1, sleep=sleep)
+
+
+def test_waiting_gives_up_after_the_timeout():
+    row = _row(start="2026-10-20T10:00:00+00:00", end="2026-10-20T11:00:00+00:00")
+    stub = StubClient([row], T_START)
+    slot = hrm.Slot(stub, [row], assigned_later=True)
+    waited = [0.0]
+
+    def sleep(seconds):
+        waited[0] += seconds
+    with pytest.raises(TimeoutError):
+        slot.wait_until_start(poll=5, timeout=12, sleep=sleep)
+    assert waited[0] <= 15
+
+
+def test_refresh_keeps_the_rows_when_the_server_forgets_them():
+    row = _row()
+    stub = StubClient([], T_START)
+    slot = hrm.Slot(stub, [row], assigned_later=False)
+    assert slot.refresh().id == row.id

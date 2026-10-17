@@ -101,6 +101,10 @@ class Client:
             raise HRMError("server sent unexpected JSON for %s %s" % (method, path))
         return parsed
 
+    def now(self) -> datetime:
+        """This client's idea of now (injectable for tests)."""
+        return self._clock()
+
     # -- read API --------------------------------------------------------
     def users(self) -> List[str]:
         data = self._request("GET", "/api/users")
