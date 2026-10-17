@@ -33,10 +33,36 @@ def test_train_gpu_parses_its_arguments():
 
 def test_train_gpu_uses_the_assigned_slot_contract():
     src = (EXAMPLES / "train_gpu.py").read_text()
-    for needed in ("hrm.reserve(", "slot.check()", "notice_seconds", "auto_advance",
+    for needed in ("hrm.reserve(", "slot.run(", "notice_seconds", "auto_advance",
                    "Preempted", "hrm.capacity("):
         assert needed in src, needed
     assert "hrm.book(" not in src        # the old day-based verb is not this path
+
+
+def test_train_gpu_can_be_stopped_mid_epoch():
+    """The point of running the job as a child: the stop event is checked every step,
+    so the card is given back at once rather than at the end of the epoch."""
+    src = (EXAMPLES / "train_gpu.py").read_text()
+    worker = src.split("def train_worker(", 1)[1].split("\ndef ", 1)[0]
+    assert "stop.is_set()" in worker
+    for_steps = worker.split('for step in range(', 1)[1]
+    assert "stop.is_set()" in for_steps.split("save_checkpoint", 1)[0], \
+        "the stop event must be checked inside the step loop, not only per epoch"
+    assert "save_checkpoint" in for_steps        # and it checkpoints before leaving
+
+
+def test_train_gpu_promises_the_notice_it_can_keep():
+    """A job that needs `grace` seconds to checkpoint must not promise 0."""
+    src = (EXAMPLES / "train_gpu.py").read_text()
+    assert "notice_seconds=None if args.important else int(args.grace)" in src
+
+
+def test_the_worker_is_importable_by_a_spawned_child():
+    """Slot.run uses the spawn start method, so the target has to be a module-level
+    function -- a closure or a local would not pickle."""
+    module = _load("train_gpu")
+    assert callable(module.train_worker)
+    assert module.train_worker.__qualname__ == "train_worker"
 
 
 def test_train_gpu_checkpoints_and_resumes():
@@ -84,8 +110,12 @@ def test_train_gpu_puts_the_work_on_the_booked_card():
     else's card while the booking says otherwise."""
     src = (EXAMPLES / "train_gpu.py").read_text()
     assert 'os.environ["CUDA_VISIBLE_DEVICES"]' not in src
-    assert "set_device(slot.gpu)" in src
-    assert 'device="cuda:%d" % ' in src or "cuda:%d" in src
+    # The booked card is carried into the child and selected there, where the CUDA
+    # context belongs; the parent never picks a device implicitly.
+    assert '"gpu": slot.gpu' in src
+    worker = src.split("def train_worker(", 1)[1].split("\ndef ", 1)[0]
+    assert "torch.cuda.set_device(gpu)" in worker
+    assert 'device = "cuda:%d" % gpu' in worker
     assert 'device="cuda"' not in src          # never the implicit current device
 
 

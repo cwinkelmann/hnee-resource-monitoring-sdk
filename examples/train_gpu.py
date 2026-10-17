@@ -8,10 +8,17 @@ of these and let the server decide the order.
 
     python examples/train_gpu.py --memory 19.5 --hours 1 --out runs/demo
 
-Being preempted is a normal outcome, not a failure. The script books `lendable`
-with `notice_seconds=0`, which says "an important booking may have this card at
-once"; when that happens it writes a checkpoint and exits 0, and the same command
-resumes from where it stopped.
+Being preempted is a normal outcome, not a failure. When the card is taken this
+writes a checkpoint and exits 0, and the same command resumes from where it stopped.
+
+The training runs in a **child process** (hrm.Slot.run), so the parent can end it
+the moment the card is taken rather than at the end of the current epoch. The
+simpler shape -- `slot.check()` between epochs, no child process -- is fine when a
+unit of work is seconds long; it is wrong when it is an hour, because the card
+stays held for all of it. See docs/walkthrough.md.
+
+`--grace` is how long the child is given to checkpoint before it is ended, and the
+booking promises exactly that as its notice: promise what you can deliver.
 
 Needs PyTorch (`pip install torch`) and a CUDA GPU; everything else is the hrm SDK.
 """
@@ -53,6 +60,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="give up if the earliest slot is after this ISO time")
     p.add_argument("--note", default="train_gpu.py",
                    help="note on the booking, so a script can find its own again")
+    p.add_argument("--grace", type=float, default=30.0,
+                   help="seconds the job gets to checkpoint when the card is taken; "
+                        "the booking promises exactly this as its notice")
     return p
 
 
@@ -135,20 +145,61 @@ def save_checkpoint(torch, path: Path, model, optimiser, epoch: int,
     tmp.replace(path)          # atomic: a checkpoint is never half-written
 
 
-def train_one_epoch(torch, model, optimiser, scaler, steps: int, device: str) -> float:
-    model.train()
-    total = 0.0
-    for _ in range(steps):
-        batch = torch.randn(BATCH, SEQ_LEN, D_MODEL, device=device)
-        target = torch.randn(BATCH, SEQ_LEN, D_MODEL, device=device)
-        optimiser.zero_grad(set_to_none=True)
-        with autocast(torch):
-            loss = torch.nn.functional.mse_loss(model(batch), target)
-        scaler.scale(loss).backward()
-        scaler.step(optimiser)
-        scaler.update()
-        total += float(loss.detach())
-    return total / max(steps, 1)
+def one_step(torch, model, optimiser, scaler, device: str) -> float:
+    batch = torch.randn(BATCH, SEQ_LEN, D_MODEL, device=device)
+    target = torch.randn(BATCH, SEQ_LEN, D_MODEL, device=device)
+    optimiser.zero_grad(set_to_none=True)
+    with autocast(torch):
+        loss = torch.nn.functional.mse_loss(model(batch), target)
+    scaler.scale(loss).backward()
+    scaler.step(optimiser)
+    scaler.update()
+    return float(loss.detach())
+
+
+def train_worker(stop, cfg: dict) -> None:
+    """The job itself, in a child process started by Slot.run.
+
+    `stop` is set the instant the card is taken. It is checked every step, not every
+    epoch, so the card is given back in well under a second plus whatever the
+    checkpoint costs -- and the checkpoint is the last thing this does.
+
+    `cfg` is a plain dict because the child is started with "spawn" and everything
+    has to pickle. torch is imported here, in the child, which is also where the
+    CUDA context belongs.
+    """
+    import torch
+
+    gpu, out = cfg["gpu"], Path(cfg["out"])
+    device = "cuda:%d" % gpu
+    torch.cuda.set_device(gpu)
+    checkpoint = out / "checkpoint.pt"
+
+    layers = checkpoint_layers(torch, checkpoint, device) or layers_for(cfg["memory"])
+    model = build_model(torch, cfg["memory"], layers).to(device)
+    optimiser = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    scaler = make_scaler(torch)
+    first = load_checkpoint(torch, checkpoint, model, optimiser, device)
+    print("%d transformer blocks on GPU %d" % (layers, gpu), flush=True)
+
+    for epoch in range(first, cfg["epochs"]):
+        began = time.monotonic()
+        total = 0.0
+        model.train()
+        for step in range(cfg["steps"]):
+            if stop.is_set():
+                # The card has been taken. Keep the epoch before this one -- this one
+                # is unfinished -- and get off the GPU.
+                save_checkpoint(torch, checkpoint, model, optimiser, epoch - 1, layers)
+                print("stopped at epoch %d step %d; checkpointed epoch %d"
+                      % (epoch, step, epoch - 1), flush=True)
+                return
+            total += one_step(torch, model, optimiser, scaler, device)
+        save_checkpoint(torch, checkpoint, model, optimiser, epoch, layers)
+        held = torch.cuda.memory_reserved(gpu) / (1024 ** 3)
+        print("epoch %d  loss %.4f  %.1fs  %.1f GiB on GPU %d"
+              % (epoch, total / max(cfg["steps"], 1), time.monotonic() - began,
+                 held, gpu), flush=True)
 
 
 def main(argv=None) -> int:
@@ -171,7 +222,10 @@ def main(argv=None) -> int:
                            # lendable with no notice: a colleague who needs the card
                            # gets it at once, and this job resumes from its
                            # checkpoint later.
-                           notice_seconds=None if args.important else 0,
+                           # Promise what the job can deliver: it needs `grace`
+                           # seconds to write its checkpoint, so it says so rather
+                           # than promising 0 and taking longer.
+                           notice_seconds=None if args.important else int(args.grace),
                            # and if a card frees up before the assigned start, take it
                            auto_advance=True,
                            not_later_than=args.not_later_than,
@@ -191,37 +245,25 @@ def main(argv=None) -> int:
         print("starting now on GPU %d" % slot.gpu)
 
     checkpoint = args.out / "checkpoint.pt"
-    # Name the card explicitly. CUDA_VISIBLE_DEVICES would have to be set before
-    # torch is imported to have any effect, and by here the driver is initialised
-    # and the device list cached -- so a job that booked GPU 5 would quietly train
-    # on physical GPU 0, which on a shared box is someone else's card.
-    device = "cuda:%d" % slot.gpu
+    cfg = {"gpu": slot.gpu, "out": str(args.out), "memory": memory,
+           "epochs": args.epochs, "steps": args.steps}
     try:
         with slot:
-            torch.cuda.set_device(slot.gpu)
             print("GPU %d is mine until %s"
-                  % (slot.gpu, slot.end.astimezone().strftime("%H:%M")))
-            # A resume must rebuild the same model the checkpoint was saved from.
-            layers = checkpoint_layers(torch, checkpoint, device) or layers_for(memory)
-            model = build_model(torch, memory, layers).to(device)
-            optimiser = torch.optim.AdamW(model.parameters(), lr=1e-4)
-            scaler = make_scaler(torch)
-            first = load_checkpoint(torch, checkpoint, model, optimiser, device)
-
-            for epoch in range(first, args.epochs):
-                slot.check()        # the one safe place to stop: before the next epoch
-                began = time.monotonic()
-                loss = train_one_epoch(torch, model, optimiser, scaler, args.steps,
-                                       device)
-                save_checkpoint(torch, checkpoint, model, optimiser, epoch, layers)
-                held = torch.cuda.memory_reserved(slot.gpu) / (1024 ** 3)
-                print("epoch %d  loss %.4f  %.1fs  %.1f GiB on GPU %d"
-                      % (epoch, loss, time.monotonic() - began, held, slot.gpu),
-                      flush=True)
-                if slot.end <= slot.client.now():
-                    print("the booked window is over; stopping at epoch %d" % epoch)
-                    break
+                  % (slot.gpu, slot.end.astimezone().strftime("%H:%M")), flush=True)
+            # The job runs as a child so it can be ended the instant the card is
+            # taken, rather than at the end of the current epoch. The parent only
+            # ever stops its own child.
+            outcome = slot.run(train_worker, args=(cfg,), grace=args.grace)
+            if outcome == "taken":
+                by = ", ".join(slot.taken.get("by") or []) or "someone"
+                print("preempted: GPU %d was taken by %s" % (slot.gpu, by))
+                print("checkpoint is at %s; run the same command to carry on"
+                      % checkpoint)
+                return 0
     except hrm.Preempted as taken:
+        # Slot.run returns "taken" rather than raising, so this is only reached if the
+        # card goes while the slot is being entered or left.
         print("preempted: %s" % taken)
         print("checkpoint is at %s; run the same command to carry on" % checkpoint)
         return 0

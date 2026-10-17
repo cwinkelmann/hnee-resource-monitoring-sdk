@@ -362,3 +362,66 @@ class Slot:
         finally:
             self.release()
         return False
+
+    # --- running the job as a child, so it can be stopped at once -------------------
+    def run(self, target: Callable[..., Any], args: tuple = (), grace: float = 5.0,
+            poll: float = 0.25, ctx=None) -> str:
+        """Run ``target(stop, *args)`` in a child process and end it the moment this
+        slot's card is taken. Returns ``"completed"`` or ``"taken"``.
+
+        This is the other half of check(). The epoch-boundary idiom holds the card
+        until the current unit of work ends -- fine when that is seconds, wrong when
+        it is an hour. Here the parent is told by the watcher and acts immediately:
+        it sets ``stop``, gives the child ``grace`` seconds to checkpoint, and ends
+        it if it will not go.
+
+            def train(stop, out):
+                while not stop.is_set():
+                    one_step()
+                save_checkpoint(out)      # the stop event is your last chance
+
+            slot.run(train, args=(out_dir,))
+
+        The parent only ever stops **its own child**. Nothing else is signalled,
+        here or anywhere else in this SDK.
+
+        The child is started with the "spawn" method, not fork: a process that has
+        already initialised CUDA cannot be forked and still use the GPU, and the
+        parent here has usually touched the card. That means ``target`` must be a
+        module-level function and ``args`` must be picklable.
+        """
+        import multiprocessing
+
+        ctx = ctx or multiprocessing.get_context("spawn")
+        stop = ctx.Event()
+        child = ctx.Process(target=target, args=(stop,) + tuple(args), daemon=True)
+        child.start()
+        try:
+            if self.watcher_parked:
+                return self._supervise(child, stop, grace, poll)
+            with self.watch():
+                return self._supervise(child, stop, grace, poll)
+        finally:
+            self._end_child(child, stop, grace)
+
+    def _supervise(self, child, stop, grace: float, poll: float) -> str:
+        while child.is_alive():
+            if self.taken is not None:
+                self._end_child(child, stop, grace)
+                return "taken"
+            time.sleep(poll)
+        return "taken" if self.taken is not None else "completed"
+
+    @staticmethod
+    def _end_child(child, stop, grace: float) -> None:
+        """Ask, then insist. A job that checkpoints on the stop event goes quietly;
+        one that ignores it is terminated, because the card has to be free."""
+        if not child.is_alive():
+            child.join()
+            return
+        stop.set()
+        child.join(timeout=grace)
+        if child.is_alive():
+            log.warning("the job did not stop within %.1fs; ending it", grace)
+            child.terminate()
+            child.join()

@@ -272,6 +272,12 @@ Three things are worth knowing:
   thread sets a flag; `check()` raises `hrm.Preempted` the next time you ask.
   Call it between epochs, after a checkpoint — the middle of a CUDA kernel is
   not a safe place to stop, and nothing here signals your process.
+- **When a unit of work is long, run it in a child instead.** `slot.run(target,
+  args=...)` starts `target(stop, *args)` as a child process and ends it the
+  moment the card is taken: it sets `stop`, gives the child `grace` seconds to
+  checkpoint, and terminates it if it will not go. The parent only ever stops its
+  own child. The child is spawned, not forked, so the target must be a
+  module-level function and its arguments must pickle.
 - **Being preempted is a normal outcome.** A job that checkpoints resumes from
   where it stopped; that is how a long queue of jobs shares a box with people
   who need a card now.

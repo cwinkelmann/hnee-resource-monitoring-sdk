@@ -141,33 +141,71 @@ Three things in that transcript are the whole design:
 
 ## 6. What the job's code looks like
 
+There are two shapes, and the difference is how long the card stays held after the server
+says someone else needs it.
+
+**Ask at a safe point.** The simplest version checks between units of work:
+
 ```python
 import hrm
 
-with hrm.reserve(memory=19.5, hours=1, notice_seconds=0) as slot:
+with hrm.reserve(memory=19.5, hours=1, notice_seconds=5) as slot:
     for epoch in range(epochs):
         slot.check()            # raises hrm.Preempted once the card is taken
         train_one_epoch()
         save_checkpoint()
 ```
 
-Entering waits for the slot's start, parks the watcher and sets the device; leaving stops
-the watcher and releases the booking, on every path including an exception.
-[`examples/train_gpu.py`](../examples/train_gpu.py) is that loop with real training around
-it, and it resumes from its last checkpoint when you run it again.
+The watcher thread sets a flag and `check()` raises at the next boundary. That is honest
+and simple, and it is right when an epoch is seconds long. It is wrong when an epoch is an
+hour: the notice says "at once" and the card is held for another fifty minutes.
 
-`slot.check()` is where the job stops, not where it is stopped. The watcher thread sets a
-flag and `check()` raises at the next safe point. Nothing signals your process: the server
-writes a row and tells a client, and your own code decides to stop. With no root on these
-boxes that is not one option among several — it is the ceiling.
+**Stop the work itself.** The other shape runs the job in a child process, so the parent
+can end it the moment it is told:
+
+```python
+def train(stop, cfg):
+    for epoch in range(cfg["epochs"]):
+        for step in range(cfg["steps"]):
+            if stop.is_set():           # checked every step, not every epoch
+                save_checkpoint()       # the stop event is your last chance
+                return
+            one_step()
+        save_checkpoint()
+
+with hrm.reserve(memory=19.5, hours=1, notice_seconds=30) as slot:
+    outcome = slot.run(train, args=(cfg,), grace=30)   # "completed" or "taken"
+```
+
+`Slot.run` sets `stop`, gives the child `grace` seconds to write its checkpoint, and ends it
+if it will not go. The parent only ever stops **its own child** — nothing else is signalled,
+here or anywhere else in this SDK. It is the shape
+[`playground/revocation_mvp.py`](https://github.com/cwinkelmann/hnee-resource-monitoring)
+prototyped against a watch file, with the long-poll in place of the file.
+
+[`examples/train_gpu.py`](../examples/train_gpu.py) uses it, and resumes from its last
+checkpoint when you run it again.
+
+Two details that matter more than they look:
+
+- **The child is started with `spawn`, not `fork`.** A process that has already initialised
+  CUDA cannot be forked and still use the GPU, and the parent usually has. So the target
+  must be a module-level function and its arguments must pickle.
+- **Promise the notice you can keep.** If your checkpoint takes thirty seconds, book
+  `notice_seconds=30`, not 0. The number is what the next person waits for, and a promise
+  of 0 followed by thirty seconds of writing is worse than saying thirty.
+
+Either way, nothing signals your process from outside. The server writes a row and tells a
+client; your own code decides to stop. With no root on these boxes that is not one option
+among several — it is the ceiling.
 
 ## 7. What this does not do
 
 - **It enforces nothing.** See the screenshot in §1: a process can use a card nobody booked,
   and a job can ignore its revocation. The alerts name you; that is the mechanism.
-- **`notice_seconds=0` means "at the next check"**, which in `train_gpu.py` is the next epoch
-  — about four seconds there. The notification arrives in milliseconds; the job chooses to
-  finish its epoch, because that is where a checkpoint is safe.
+- **The notice is only as good as what the job does with it.** With `slot.check()` it means
+  "at the next boundary"; with `slot.run()` it means "within `grace`, including the
+  checkpoint". Book the number you can actually keep.
 - **A declared notice only counts while you are listening.** The server reads it from the
   parked long-poll, so a crashed job gets the box's full `grace_minutes` instead. It can
   never buy you *more* notice than that grace either.
