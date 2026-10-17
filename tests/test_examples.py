@@ -103,3 +103,50 @@ def test_train_gpu_handles_a_refused_reservation():
     src = (EXAMPLES / "train_gpu.py").read_text()
     body = src.split("def main(", 1)[1]
     assert "hrm.Conflict" in body
+
+
+# --- the demo scripts and the walkthrough -------------------------------------------
+DEMO = EXAMPLES / "demo"
+DOCS = Path(__file__).resolve().parents[1] / "docs"
+
+
+def test_the_demo_scripts_are_valid_shell():
+    import subprocess
+    for script in sorted(DEMO.glob("*.sh")):
+        done = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
+        assert done.returncode == 0, "%s: %s" % (script.name, done.stderr)
+
+
+def test_every_demo_script_cleans_up_after_itself():
+    """They book real slots on a real box. A demo that leaves bookings behind takes a
+    card away from whoever comes next."""
+    for script in sorted(DEMO.glob("[0-9]*.sh")):
+        src = script.read_text()
+        assert "trap " in src and "release_mine" in src, script.name
+        assert "EXIT INT TERM" in src, script.name
+
+
+def test_the_demos_never_signal_anything_but_their_own_child():
+    for script in sorted(DEMO.glob("*.sh")):
+        src = script.read_text()
+        for line in src.splitlines():
+            if "pkill" in line and not line.strip().startswith("#"):
+                raise AssertionError("%s uses pkill: %s" % (script.name, line.strip()))
+            if "kill " in line and not line.strip().startswith("#"):
+                assert "JOB_PID" in line, "%s: %s" % (script.name, line.strip())
+
+
+def test_the_walkthrough_links_images_that_exist():
+    import re
+    text = (DOCS / "walkthrough.md").read_text()
+    images = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", text)
+    assert images, "the walkthrough has no screenshots"
+    for rel in images:
+        assert (DOCS / rel).exists(), rel
+
+
+def test_the_walkthrough_points_at_scripts_that_exist():
+    import re
+    text = (DOCS / "walkthrough.md").read_text()
+    for rel in re.findall(r"\]\((\.\./[^)]+)\)", text):
+        assert (DOCS / rel).resolve().exists(), rel

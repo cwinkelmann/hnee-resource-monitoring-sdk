@@ -16,7 +16,8 @@ hrm.cancel(result.bookings[0])
 
 A full walk-through with real (anonymised) output is in
 [`examples/quickstart.ipynb`](examples/quickstart.ipynb), with the rest listed in
-[`examples/README.md`](examples/README.md).
+[`examples/README.md`](examples/README.md). [`docs/walkthrough.md`](docs/walkthrough.md)
+shows the booking model end to end, with screenshots and transcripts from a real box.
 
 ## Install via pip directly from GitHub
 

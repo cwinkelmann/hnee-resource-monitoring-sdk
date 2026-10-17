@@ -6,6 +6,16 @@
 | [`notebook_session.ipynb`](notebook_session.ipynb) | hold a GPU while you work in a notebook, then give it back |
 | [`train_gpu.py`](train_gpu.py) | a long training run that takes its turn: reserve, wait, train, checkpoint, release |
 
+The [walkthrough](../docs/walkthrough.md) runs the whole model past you with screenshots
+and real transcripts, and `demo/` reproduces it:
+
+| script | needs | shows |
+|---|---|---|
+| [`demo/01-queue.sh`](demo/01-queue.sh) | a booking server | capacity, a queued slot, an early release pulling it forward |
+| [`demo/02-preemption.sh`](demo/02-preemption.sh) | a free GPU and PyTorch | a training run preempted, checkpointing and resuming |
+
+Both release every booking they make on the way out, including on Ctrl-C.
+
 `train_gpu.py` is the one to copy for batch work. It books `lendable` with
 `notice_seconds=0`, so a colleague who needs the card gets it at once and the job resumes
 from its last checkpoint later — which is how thousands of one-hour jobs share a box

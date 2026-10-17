@@ -51,6 +51,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="book as important: nobody can take this card from you")
     p.add_argument("--not-later-than", default=None,
                    help="give up if the earliest slot is after this ISO time")
+    p.add_argument("--note", default="train_gpu.py",
+                   help="note on the booking, so a script can find its own again")
     return p
 
 
@@ -173,7 +175,7 @@ def main(argv=None) -> int:
                            # and if a card frees up before the assigned start, take it
                            auto_advance=True,
                            not_later_than=args.not_later_than,
-                           note="train_gpu.py")
+                           note=args.note)
     except hrm.Conflict as refused:
         # reserve() does not fail for lack of capacity, but it can still refuse: the
         # box's max_pending_per_user, or nothing fitting inside its horizon.
