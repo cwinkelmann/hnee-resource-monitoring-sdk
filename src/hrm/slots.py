@@ -107,19 +107,70 @@ class Watcher:
         return False
 
     def stop(self) -> None:
+        """Stop listening and return at once.
+
+        It does not wait for a parked long-poll: the server holds one for up to a
+        minute, the threads are daemons, and this runs on the exit path that
+        notice_seconds=0 promises to be quick. A poll that answers after this is
+        discarded -- see _deliver -- so nothing can set `taken` on a slot that has
+        already been released.
+        """
         self._stop.set()
-        for thread in self._threads:
-            thread.join(timeout=5.0)
+        with self._lock:
+            self._live = 0              # say so now, not in five seconds
         self._threads = []
 
+    def _deliver(self, event: Dict[str, Any]) -> bool:
+        """Hand an event to the slot, unless we have been stopped. Returns whether
+        it was delivered."""
+        if self._stop.is_set():
+            return False
+        self.slot._record_taken(event)
+        if self.on_taken is not None:
+            try:
+                self.on_taken(event)
+            except Exception:
+                log.exception("on_taken callback raised")
+        return True
+
+    def _missed(self, booking_id: int, end: datetime) -> Optional[Dict[str, Any]]:
+        """Did the card go while nobody was listening?
+
+        The server drops an event with no watcher parked, so a take delivered in the
+        gap between two long-polls is lost for good. The row still shows it: a
+        cancelled booking, or an end that moved earlier, means the card went.
+        """
+        try:
+            rows = {b.id: b for b in
+                    self.slot.client.bookings(include_cancelled=True)}
+        except Exception as exc:
+            log.warning("could not re-read booking %d (%s)", booking_id,
+                        exc.__class__.__name__)
+            return None
+        row = rows.get(booking_id)
+        if row is None:
+            return None
+        if row.cancelled_at is not None:
+            return {"event": "cancelled", "effective_mib": 0, "lost_mib": row.vram_mib,
+                    "by": [], "truncated": False, "cancelled": True,
+                    "deadline": row.cancelled_at.isoformat(), "noticed_late": True}
+        if row.end < end:
+            return {"event": "taken", "effective_mib": 0, "lost_mib": row.vram_mib,
+                    "by": sorted({u for seg in row.taken for u in seg.get("by", ())}),
+                    "truncated": True, "cancelled": False,
+                    "deadline": row.end.isoformat(), "noticed_late": True}
+        return None
+
     def _loop(self, booking_id: int) -> None:
+        end = next((b.end for b in self.slot.bookings if b.id == booking_id),
+                   self.slot.end)
         try:
             while not self._stop.is_set():
                 try:
                     event = self.slot.client.watch_claim(booking_id)
                 except NotFound:
-                    log.warning("this server has no /events route for booking %d; "
-                                "running unwatched", booking_id)
+                    log.warning("this server has no /events route for booking %d (or "
+                                "the booking is gone); running unwatched", booking_id)
                     return
                 except Conflict:
                     return              # cancelled or over: there is nothing to watch
@@ -130,17 +181,17 @@ class Watcher:
                         return
                     continue
                 if event is None:
-                    continue            # 204: the hold expired, so reconnect
-                self.slot._record_taken(event)
-                if self.on_taken is not None:
-                    try:
-                        self.on_taken(event)
-                    except Exception:
-                        log.exception("on_taken callback raised")
+                    # 204: the hold expired. Before reconnecting, check whether the
+                    # card went while no poll was parked.
+                    missed = self._missed(booking_id, end)
+                    if missed is None:
+                        continue
+                    event = missed
+                self._deliver(event)
                 return
         finally:
             with self._lock:
-                self._live -= 1
+                self._live = max(self._live - 1, 0)
 
 
 class Slot:
@@ -161,6 +212,7 @@ class Slot:
         self.revoked = list(revoked or [])
         self.taken: Optional[Dict[str, Any]] = None   # set by a Watcher, read by check()
         self.watcher: Optional[Watcher] = None
+        self.wait_poll = 10.0        # seconds between looks while `with slot:` waits
 
     def __repr__(self) -> str:
         return "Slot(ids=%r, gpus=%r, %s..%s)" % (
@@ -292,7 +344,14 @@ class Slot:
 
         Leaving the block stops the watcher and releases the booking, on every path.
         """
-        self.wait_until_start()
+        try:
+            self.wait_until_start(poll=self.wait_poll)
+        except BaseException:
+            # The wait is inside __enter__, so __exit__ never runs if it raises --
+            # a Conflict or a Ctrl-C while queued would otherwise leave the
+            # reservation holding a window nobody will use.
+            self.release()
+            raise
         self.watch().__enter__()
         return self
 

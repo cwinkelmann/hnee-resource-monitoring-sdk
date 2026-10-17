@@ -396,3 +396,30 @@ def test_preempted_from_check_still_releases_the_slot(client, fake):
                 slot.check()
                 time.sleep(0.02)
     assert fake.requests_to("POST", "/api/claims/11/release")
+
+
+def test_entering_releases_the_slot_if_the_wait_fails(client, fake):
+    """__enter__ waits for the start, so a Conflict or Ctrl-C while queued used to
+    skip __exit__ entirely and leave the reservation holding a future window."""
+    fake.script("POST", "/api/claims/11/release", 200, _released())
+    # A slot queued for this evening, which someone cancels while we wait for it.
+    queued = _row(start="2026-10-17T18:00:00+00:00", end="2026-10-17T19:00:00+00:00")
+    cancelled = _row(start="2026-10-17T18:00:00+00:00",
+                     end="2026-10-17T19:00:00+00:00",
+                     cancelled_at="2026-10-17T10:05:00+00:00")
+    stub = StubClient([cancelled], T_START)
+    stub.release_claim = client.release_claim
+    slot = hrm.Slot(stub, [queued], assigned_later=True)
+    slot.wait_poll = 0.05
+    with pytest.raises(hrm.Conflict):
+        with slot:
+            raise AssertionError("the body must never run")
+    assert fake.requests_to("POST", "/api/claims/11/release")
+
+
+def test_a_booking_is_still_hashable(client, fake):
+    """Booking is a frozen dataclass and set(bookings) worked before `taken` was
+    added; a list field would have made it unhashable."""
+    fake.script("POST", "/api/claims", 201, SLOT_BODY)
+    slot = client.reserve(memory=1, hours=1)
+    assert len({slot.booking, slot.booking}) == 1

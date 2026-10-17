@@ -6,10 +6,15 @@ from typing import Optional
 class HRMError(Exception):
     """Base class for all SDK errors."""
 
-    def __init__(self, detail: str = "", status: Optional[int] = None) -> None:
+    def __init__(self, detail: str = "", status: Optional[int] = None,
+                 extra: Optional[dict] = None) -> None:
         super().__init__(detail)
         self.status = status
         self.detail = detail
+        # Whatever the server attached beyond the fixed shape: on a 409 that is
+        # `earliest` and `free_now`, or `max_pending_per_user` and `pending`. Without
+        # it a caller is told "conflict" and has nothing to act on.
+        self.extra = extra or {}
 
     def __str__(self) -> str:
         if not self.detail and self.status is not None:
@@ -65,6 +70,7 @@ def error_for_status(status: int, body: Optional[dict]) -> HRMError:
     """Map an HTTP error status and decoded JSON body to an exception."""
     body = body if isinstance(body, dict) else {}
     detail = body.get("detail") or body.get("error") or "HTTP %d" % status
+    extra = {k: v for k, v in body.items() if k not in ("detail", "error")}
     if status in (400, 413, 415):
         cls = InvalidRequest
     elif status == 403:
@@ -79,4 +85,4 @@ def error_for_status(status: int, body: Optional[dict]) -> HRMError:
         cls = ServerUnavailable
     else:
         cls = HRMError
-    return cls(str(detail), status)
+    return cls(str(detail), status, extra)

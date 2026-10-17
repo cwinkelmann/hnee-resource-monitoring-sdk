@@ -144,3 +144,58 @@ def test_a_group_slot_watches_every_row(client, fake):
         for row in rows:
             assert _wait_for(lambda r=row: fake.requests_to(
                 "GET", "/api/claims/%d/events" % r["id"]))
+
+
+# --- fixes from the whole-branch review ---------------------------------------------
+def test_stopping_does_not_wait_for_a_parked_poll(slot, fake):
+    """stop() used to join for 5 s per row. The exit path is exactly what
+    notice_seconds=0 promises to be fast, and the thread is a daemon anyway."""
+    fake.script("GET", EVENTS, 204, None, delay=3.0)
+    watcher = slot.watch()
+    watcher.__enter__()
+    assert _wait_for(lambda: watcher.watching)
+    began = time.monotonic()
+    watcher.stop()
+    assert time.monotonic() - began < 1.0
+    assert watcher.watching is False      # it says so at once, not in five seconds
+
+
+def test_an_event_that_lands_after_stop_is_discarded(slot, fake):
+    """A late answer used to set slot.taken after the slot was released, so check()
+    raised Preempted for a booking that was already given back."""
+    fake.script("GET", EVENTS, 200, TAKEN, delay=1.0)
+    with slot.watch():
+        time.sleep(0.1)
+    time.sleep(1.5)                       # the parked answer arrives now
+    assert slot.taken is None
+    slot.check()                          # and check() stays quiet
+
+
+def test_a_revocation_missed_while_reconnecting_is_noticed_on_the_next_read(slot, fake):
+    """Watchers.notify drops an event with no listener, so a take delivered in the
+    gap between two long-polls is lost for good. The row still shows it: a truncated
+    end means the card went."""
+    fake.script("GET", EVENTS, 204, None, times=1)       # the hold expires
+    truncated = dict(SLOT_BODY["claim"])
+    truncated["end"] = "2026-10-17T10:20:00+00:00"       # someone cut it short
+    fake.script("GET", "/api/claims", 200,
+                {"now": "2026-10-17T10:20:00+00:00", "claims": [truncated]}, times=None)
+    fake.script("GET", EVENTS, 204, None, times=None)
+    with slot.watch():
+        assert _wait_for(lambda: slot.taken is not None, seconds=10)
+    assert slot.taken["event"] == "taken"
+    assert slot.taken["truncated"] is True
+    with pytest.raises(Preempted):
+        slot.check()
+
+
+def test_a_cancellation_missed_while_reconnecting_is_noticed_too(slot, fake):
+    fake.script("GET", EVENTS, 204, None, times=1)
+    cancelled = dict(SLOT_BODY["claim"])
+    cancelled["cancelled_at"] = "2026-10-17T10:20:00+00:00"
+    fake.script("GET", "/api/claims", 200,
+                {"now": "2026-10-17T10:20:00+00:00", "claims": [cancelled]}, times=None)
+    fake.script("GET", EVENTS, 204, None, times=None)
+    with slot.watch():
+        assert _wait_for(lambda: slot.taken is not None, seconds=10)
+    assert slot.taken["event"] == "cancelled"

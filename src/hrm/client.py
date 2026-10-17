@@ -40,7 +40,14 @@ def _to_datetime(value: Union[datetime, str], name: str) -> datetime:
 
 
 def _iso(t: datetime) -> str:
-    """An aware datetime as the server wants it: UTC with an offset."""
+    """An aware datetime as the server wants it: UTC with an offset.
+
+    A naive datetime is read as Europe/Berlin, the same as everywhere else in this
+    SDK (see planning). Reading it as machine-local instead would make the same
+    string mean different instants on a laptop in another time zone.
+    """
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=BERLIN)
     return t.astimezone(timezone.utc).isoformat()
 
 
@@ -67,7 +74,8 @@ class Client:
         self._users_cache: Optional[List[str]] = None
 
     # -- transport -------------------------------------------------------
-    def _request(self, method: str, path: str, body: Optional[dict] = None) -> dict:
+    def _request(self, method: str, path: str, body: Optional[dict] = None,
+                 timeout: Optional[float] = None) -> dict:
         headers = {"User-Agent": "hrm-sdk/" + __version__, "Accept": "application/json"}
         data = None
         if body is not None:
@@ -78,7 +86,9 @@ class Client:
             raise HRMError("invalid server URL %r: must start with http:// or https://" % self.url)
         try:
             req = urllib.request.Request(self.url + path, data=data, headers=headers, method=method)
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(
+                    req, timeout=self.timeout if timeout is None else timeout
+            ) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as e:
             try:
@@ -158,9 +168,14 @@ class Client:
                 note: Optional[str] = None, user: Optional[str] = None) -> Slot:
         """Reserve `memory` GiB for `hours`, starting as soon as it fits.
 
-        This does not fail for lack of capacity: the server answers with a window,
-        and `slot.assigned_later` says whether it starts now or later. Wait for it
-        with `slot.wait_until_start()`, and give it back with `slot.release()`.
+        A full box is not a refusal: the server answers with a window, and
+        `slot.assigned_later` says whether it starts now or later. Wait for it with
+        `slot.wait_until_start()`, and give it back with `slot.release()`.
+
+        It can still raise `Conflict`, and the reason is on `err.extra`: the box's
+        `max_pending_per_user` (how many not-yet-started bookings one person may
+        hold), a `not_later_than` the earliest slot misses, or nothing fitting
+        inside the server's 14-day horizon.
 
         `notice_seconds=0` promises you will be off the card at once if an important
         booking wants it -- the server honours that only while a watcher is parked,
@@ -380,11 +395,11 @@ class Client:
         """
         booking_id = booking_or_id.id if isinstance(booking_or_id, Booking) \
             else int(booking_or_id)
-        was, self.timeout = self.timeout, timeout
-        try:
-            data = self._request("GET", "/api/claims/%d/events" % booking_id)
-        finally:
-            self.timeout = was
+        # The timeout is passed per request, never stored: this client is shared with
+        # every watcher thread, and a stored 90 s would leak into the main thread's
+        # reserve() and release() -- and two watchers would lose each other's restore.
+        data = self._request("GET", "/api/claims/%d/events" % booking_id,
+                             timeout=timeout)
         return data or None
 
     def hold(self, gpu: int, user: Optional[str] = None) -> Booking:

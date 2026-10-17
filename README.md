@@ -228,8 +228,13 @@ the script to notice (`[ -e /tmp/stop-training ] && break`).
 ## Take the next free slot
 
 `hrm.gate()` above holds a window and renews it. The other shape is a job that
-wants its *turn*: `hrm.reserve()` never fails for lack of capacity — the server
+wants its *turn*: with `hrm.reserve()` a full box is not a refusal — the server
 assigns the earliest window that fits and moves it earlier if a card frees up.
+
+It can still raise `hrm.Conflict`, and the reason is on `err.extra`: the box's
+`max_pending_per_user` (16 by default — how many not-yet-started bookings one
+person may hold), a `not_later_than` the earliest slot misses, or nothing fitting
+inside the 14-day horizon.
 
 ```python
 with hrm.reserve(memory=19.5, hours=1, notice_seconds=0) as slot:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -62,7 +62,9 @@ class Booking:
     group_id: Optional[str] = None          # members of one atomic group share it
     notice_seconds: Optional[int] = None    # warning its owner needs before losing the card
     # Where an important booking holds this one's VRAM: {start, end, vram_mib, by}.
-    taken: List[Dict[str, Any]] = field(default_factory=list)
+    # A tuple, not a list: Booking is frozen, and a list field would make it
+    # unhashable -- set(bookings) worked before this column existed.
+    taken: Tuple[Dict[str, Any], ...] = ()
 
     @classmethod
     def from_json(cls, d: Dict[str, Any]) -> "Booking":
@@ -84,7 +86,7 @@ class Booking:
             auto_advance=bool(d.get("auto_advance", False)),
             group_id=d.get("group_id"),
             notice_seconds=d.get("notice_seconds"),
-            taken=list(d.get("taken") or []),
+            taken=tuple(d.get("taken") or ()),
         )
 
     @property

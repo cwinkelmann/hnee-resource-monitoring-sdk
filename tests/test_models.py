@@ -142,4 +142,4 @@ def test_booking_from_an_older_server_gets_sane_defaults():
     assert b.auto_advance is False
     assert b.group_id is None
     assert b.notice_seconds is None
-    assert b.taken == []
+    assert b.taken == ()        # a tuple: Booking is frozen and must stay hashable

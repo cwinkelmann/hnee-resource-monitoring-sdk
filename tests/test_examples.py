@@ -74,3 +74,32 @@ def test_every_example_is_listed_in_the_examples_readme():
     for path in sorted(EXAMPLES.iterdir()):
         if path.suffix in (".py", ".ipynb"):
             assert path.name in listing, path.name
+
+
+# --- fixes from the whole-branch review ---------------------------------------------
+def test_train_gpu_puts_the_work_on_the_booked_card():
+    """CUDA_VISIBLE_DEVICES set after `import torch` does nothing -- the driver is
+    already initialised and the device list cached -- so the job would train on
+    physical GPU 0 whatever it booked. On a shared box that means running on someone
+    else's card while the booking says otherwise."""
+    src = (EXAMPLES / "train_gpu.py").read_text()
+    assert 'os.environ["CUDA_VISIBLE_DEVICES"]' not in src
+    assert "set_device(slot.gpu)" in src
+    assert 'device="cuda:%d" % ' in src or "cuda:%d" in src
+    assert 'device="cuda"' not in src          # never the implicit current device
+
+
+def test_train_gpu_checkpoint_carries_the_model_shape():
+    """Without --memory the layer count comes from live capacity, so a resume would
+    load a checkpoint built for a different model and raise a size mismatch."""
+    src = (EXAMPLES / "train_gpu.py").read_text()
+    assert '"layers"' in src
+    assert "layers_for" in src
+
+
+def test_train_gpu_handles_a_refused_reservation():
+    """reserve() can still 409: max_pending_per_user, or nothing fitting inside the
+    14-day horizon. It sat outside the try, so the example died on a traceback."""
+    src = (EXAMPLES / "train_gpu.py").read_text()
+    body = src.split("def main(", 1)[1]
+    assert "hrm.Conflict" in body
