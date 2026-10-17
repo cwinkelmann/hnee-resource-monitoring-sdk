@@ -1,6 +1,7 @@
 """Slot and Capacity: the client-side half. The contract lives in test_live.py."""
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -8,6 +9,9 @@ import pytest
 import hrm
 from hrm.slots import Capacity
 
+TAKEN_EVENT = {"event": "taken", "effective_mib": 0, "lost_mib": 19968,
+               "by": ["dorian.zwanzig"], "truncated": True, "cancelled": False,
+               "deadline": None}
 CAP_BODY = {"free_mib": 16376, "free_gib": 16.0,
             "earliest": "2026-10-17T07:48:03+00:00", "gpu": 0, "gpus": [0]}
 
@@ -181,6 +185,12 @@ class StubClient:
     def now(self):
         return self._now
 
+    def release_claim(self, booking_or_id, end=None):   # replaced per test
+        raise AssertionError("not wired")
+
+    def watch_claim(self, booking_or_id, timeout=90.0):  # replaced per test
+        raise AssertionError("not wired")
+
     def set(self, rows=None, now=None):
         if rows is not None:
             self._rows = list(rows)
@@ -341,3 +351,48 @@ def test_release_twice_is_two_harmless_calls(client, fake):
                 {"error": "conflict", "detail": "already cancelled"})
     slot.release()
     slot.release()
+
+
+# --- the whole pattern -------------------------------------------------------------
+def test_the_context_manager_waits_parks_and_releases(client, fake):
+    fake.script("POST", "/api/claims", 201, SLOT_BODY)
+    fake.script("GET", "/api/claims/11/events", 204, None, times=None)
+    fake.script("POST", "/api/claims/11/release", 200, _released())
+    slot = client.reserve(memory=19.5, hours=1)
+    slot.client = StubClient([_row()], T_START)      # the window has begun
+    slot.client.release_claim = client.release_claim  # but the writes are real
+    with slot as entered:
+        assert entered is slot
+        assert slot.watcher is not None
+    assert slot.watcher.watching is False
+    assert fake.requests_to("POST", "/api/claims/11/release")
+
+
+def test_the_context_manager_releases_even_when_the_body_raises(client, fake):
+    fake.script("POST", "/api/claims", 201, SLOT_BODY)
+    fake.script("GET", "/api/claims/11/events", 204, None, times=None)
+    fake.script("POST", "/api/claims/11/release", 200, _released())
+    slot = client.reserve(memory=19.5, hours=1)
+    slot.client = StubClient([_row()], T_START)
+    slot.client.release_claim = client.release_claim
+    with pytest.raises(ZeroDivisionError):
+        with slot:
+            1 / 0
+    assert fake.requests_to("POST", "/api/claims/11/release")
+    assert slot.watcher.watching is False
+
+
+def test_preempted_from_check_still_releases_the_slot(client, fake):
+    fake.script("POST", "/api/claims", 201, SLOT_BODY)
+    fake.script("GET", "/api/claims/11/events", 200, TAKEN_EVENT)
+    fake.script("POST", "/api/claims/11/release", 200, _released())
+    slot = client.reserve(memory=19.5, hours=1, notice_seconds=0)
+    slot.client = StubClient([_row()], T_START)
+    slot.client.release_claim = client.release_claim
+    slot.client.watch_claim = client.watch_claim
+    with pytest.raises(hrm.Preempted):
+        with slot:
+            for _ in range(200):
+                slot.check()
+                time.sleep(0.02)
+    assert fake.requests_to("POST", "/api/claims/11/release")

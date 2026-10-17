@@ -279,3 +279,27 @@ class Slot:
         if self.taken is not None:
             by = ", ".join(self.taken.get("by") or []) or "someone"
             raise Preempted("GPU %d was taken by %s" % (self.gpu, by), self.taken)
+
+    # --- the whole job pattern -----------------------------------------------------
+    def __enter__(self) -> "Slot":
+        """Wait for the window, then park the watcher.
+
+            with hrm.reserve(memory=19.5, hours=1, notice_seconds=0) as slot:
+                for epoch in range(epochs):
+                    slot.check()          # raises Preempted if the card was taken
+                    train_one_epoch()
+                    save_checkpoint()
+
+        Leaving the block stops the watcher and releases the booking, on every path.
+        """
+        self.wait_until_start()
+        self.watch().__enter__()
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        try:
+            if self.watcher is not None:
+                self.watcher.stop()
+        finally:
+            self.release()
+        return False

@@ -62,3 +62,21 @@ def test_all_exports():
     for n in hrm.__all__:
         assert hasattr(hrm, n), n
     assert issubclass(hrm.NoCapacity, hrm.HRMError)
+
+
+def test_the_new_names_are_exported():
+    import hrm
+    for name in ("reserve", "capacity", "Slot", "Capacity", "Watcher", "Preempted"):
+        assert name in hrm.__all__, name
+        assert hasattr(hrm, name), name
+
+
+def test_the_old_names_still_mean_what_they_meant():
+    """reserve/release are deliberately different verbs from book/release(gpu): this is
+    the regression that keeps the old contract working."""
+    import inspect
+
+    import hrm
+    assert "days" in inspect.signature(hrm.book).parameters
+    assert list(inspect.signature(hrm.release).parameters) == ["gpu"]
+    assert "hours" in inspect.signature(hrm.reserve).parameters
