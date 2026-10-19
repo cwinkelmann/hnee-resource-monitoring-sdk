@@ -224,3 +224,83 @@ def test_5xx_is_server_unavailable(fake, status):
 def test_range_boundaries_accepted(fake, kw):
     Client(fake.url).bookings(**kw)
     assert fake.requests[-1].query == {"days": str(kw["days_ahead"]), "back": str(kw["days_back"])}
+
+
+# --- fixes from the whole-branch review ---------------------------------------------
+def test_a_watch_timeout_does_not_leak_into_other_calls(fake):
+    """watch_claim used to mutate client.timeout, so two overlapping watchers left it
+    at 90 s for good and every main-thread call silently inherited it."""
+    import threading
+    import time as _t
+
+    client = hrm.Client(url=fake.url, user="cwinkelmann", timeout=10.0)
+    fake.script("GET", "/api/claims/1/events", 204, None, delay=1.0)
+    worker = threading.Thread(target=client.watch_claim, args=(1,), daemon=True)
+    worker.start()
+    _t.sleep(0.3)
+    # While that watcher is parked, a main-thread call must still get its own 10 s --
+    # not the watcher's 90 s.
+    assert client.timeout == 10.0
+    worker.join(10)
+    assert client.timeout == 10.0
+
+
+def test_a_conflict_carries_the_servers_machine_readable_extras(fake):
+    """The server attaches earliest/free_now to a 409 so a caller can act on it; the
+    SDK used to keep only the detail string."""
+    client = hrm.Client(url=fake.url, user="cwinkelmann")
+    fake.script("POST", "/api/claims", 409,
+                {"error": "conflict", "detail": "the earliest slot is later than asked",
+                 "earliest": "2026-10-18T09:00:00+00:00", "free_now": 4096})
+    with pytest.raises(hrm.Conflict) as e:
+        client.reserve(memory=1, hours=1, not_later_than="2026-10-17T12:00:00+00:00")
+    assert e.value.extra["earliest"] == "2026-10-18T09:00:00+00:00"
+    assert e.value.extra["free_now"] == 4096
+    assert e.value.detail == "the earliest slot is later than asked"
+
+
+def test_the_pending_limit_409_says_what_the_limit_was(fake):
+    client = hrm.Client(url=fake.url, user="cwinkelmann")
+    fake.script("POST", "/api/claims", 409,
+                {"error": "conflict", "detail": "you already hold 16 bookings",
+                 "max_pending_per_user": 16, "pending": 16})
+    with pytest.raises(hrm.Conflict) as e:
+        client.reserve(memory=1, hours=1)
+    assert e.value.extra["max_pending_per_user"] == 16
+
+
+def test_an_error_with_no_extras_has_an_empty_dict(fake):
+    client = hrm.Client(url=fake.url, user="cwinkelmann")
+    fake.script("POST", "/api/claims", 404, {"error": "not found"})
+    with pytest.raises(hrm.NotFound) as e:
+        client.reserve(memory=1, hours=1)
+    assert e.value.extra == {}
+
+
+def test_a_naive_not_later_than_is_berlin_like_every_other_naive_time(fake, monkeypatch):
+    """planning treats a naive datetime as Europe/Berlin; _iso used to treat it as
+    machine-local, so the same string meant different instants on different laptops."""
+    monkeypatch.setenv("TZ", "America/New_York")
+    import time as _time
+    _time.tzset()
+    try:
+        client = hrm.Client(url=fake.url, user="cwinkelmann")
+        fake.script("POST", "/api/claims", 201, _SLOT_BODY)
+        client.reserve(memory=1, hours=1, not_later_than="2026-10-18T09:00:00")
+        sent = fake.requests_to("POST", "/api/claims")[-1].body["not_later_than"]
+        assert sent.startswith("2026-10-18T07:00:00")      # 09:00 Berlin is 07:00Z
+    finally:
+        monkeypatch.delenv("TZ", raising=False)
+        _time.tzset()
+
+
+_SLOT_BODY = {
+    "claim": {"id": 11, "user": "cwinkelmann", "gpu": 4, "vram_mib": 1024,
+              "start": "2026-10-17T10:00:00+00:00", "end": "2026-10-17T11:00:00+00:00",
+              "note": None, "created_at": "2026-10-17T09:00:00+00:00",
+              "created_ip": "192.0.2.10", "cancelled_at": None, "cancelled_ip": None,
+              "kind": "calendar"},
+    "claims": None, "takes": [], "adjusted_start": None, "assigned_later": False,
+    "revoked": [],
+}
+_SLOT_BODY["claims"] = [_SLOT_BODY["claim"]]

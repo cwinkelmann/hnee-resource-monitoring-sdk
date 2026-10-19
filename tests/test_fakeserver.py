@@ -101,3 +101,14 @@ def test_scripted_passthrough_lets_a_request_through(fake):
     assert s == 201 and b["claim"]["gpu"] == 4
     assert post(fake, gpu=5)[0] == 400
     assert post(fake, gpu=5)[0] == 201
+
+
+def test_a_scripted_204_is_sent_without_a_body(fake):
+    """urllib discards a 204 body whatever the server sends, so assert on the wire:
+    with HTTP/1.1 keep-alive, four bytes of "null" after a 204 desyncs the connection
+    and the *next* response on it is misparsed."""
+    import urllib.request
+    fake.script("GET", "/api/claims/1/events", 204, None)
+    with urllib.request.urlopen(fake.url + "/api/claims/1/events", timeout=5) as r:
+        assert r.status == 204
+        assert r.headers.get("Content-Length") == "0"

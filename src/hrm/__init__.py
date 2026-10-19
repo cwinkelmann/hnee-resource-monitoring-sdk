@@ -14,14 +14,18 @@ from typing import Iterable, List, Optional, Union  # noqa: E402
 
 from .client import Client  # noqa: E402
 from .errors import (Conflict, Forbidden, HRMError, InvalidRequest, NoCapacity,  # noqa: E402
-                     NotFound, RateLimited, ServerUnavailable, UnknownUser)
+                     NotFound, Preempted, RateLimited, ServerUnavailable,
+                     UnknownUser)
+from .gate import Lease, gate  # noqa: E402
+from .slots import Capacity, Slot, Watcher  # noqa: E402
 from .models import (Alert, Booking, BookingList, BookingResult, Gpu, Process,  # noqa: E402
                      Usage)
 
 __all__ = [
     "__version__",
     "connect", "users", "usage", "bookings", "book", "cancel", "hold", "release",
-    "Client",
+    "capacity", "reserve", "gate", "Client", "Lease", "Capacity", "Slot",
+    "Watcher", "Preempted",
     "Alert", "Booking", "BookingList", "BookingResult", "Gpu", "Process", "Usage",
     "HRMError", "InvalidRequest", "Forbidden", "NotFound", "Conflict", "RateLimited",
     "ServerUnavailable", "NoCapacity", "UnknownUser",
@@ -56,6 +60,22 @@ def bookings(days_ahead: int = 14, days_back: int = 7,
              include_cancelled: bool = False) -> BookingList:
     return _client().bookings(days_ahead=days_ahead, days_back=days_back,
                               include_cancelled=include_cancelled)
+
+
+def capacity(memory: Optional[float] = None, *, hours: float = 1.0,
+             gpu: Optional[int] = None, count: int = 1) -> Capacity:
+    return _client().capacity(memory, hours=hours, gpu=gpu, count=count)
+
+
+def reserve(memory: Optional[float] = None, *, hours: float = 1.0,
+            gpu: Optional[int] = None, count: int = 1, auto_advance: bool = True,
+            not_later_than: Optional[Union[datetime, str]] = None,
+            notice_seconds: Optional[int] = None, important: bool = False,
+            note: Optional[str] = None, user: Optional[str] = None) -> Slot:
+    return _client().reserve(memory, hours=hours, gpu=gpu, count=count,
+                             auto_advance=auto_advance, not_later_than=not_later_than,
+                             notice_seconds=notice_seconds, important=important,
+                             note=note, user=user)
 
 
 def book(days: Optional[Iterable[Union[date, str]]] = None, *,

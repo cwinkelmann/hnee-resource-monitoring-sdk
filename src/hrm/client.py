@@ -15,6 +15,7 @@ from . import __version__, planning
 from .errors import (Conflict, HRMError, NoCapacity, ServerUnavailable, UnknownUser,
                      error_for_status)
 from .models import BERLIN, Booking, BookingList, BookingResult, Usage
+from .slots import Capacity, Slot, _check_shape
 
 DEFAULT_URL = "http://10.188.1.1:8765"
 MAX_ATTEMPTS = 3  # book(): POST attempts in total, across candidate GPUs
@@ -36,6 +37,18 @@ def _to_datetime(value: Union[datetime, str], name: str) -> datetime:
         except ValueError:
             pass
     raise ValueError("bad %s %r, expected a datetime or ISO string" % (name, value))
+
+
+def _iso(t: datetime) -> str:
+    """An aware datetime as the server wants it: UTC with an offset.
+
+    A naive datetime is read as Europe/Berlin, the same as everywhere else in this
+    SDK (see planning). Reading it as machine-local instead would make the same
+    string mean different instants on a laptop in another time zone.
+    """
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=BERLIN)
+    return t.astimezone(timezone.utc).isoformat()
 
 
 @contextlib.contextmanager
@@ -61,7 +74,8 @@ class Client:
         self._users_cache: Optional[List[str]] = None
 
     # -- transport -------------------------------------------------------
-    def _request(self, method: str, path: str, body: Optional[dict] = None) -> dict:
+    def _request(self, method: str, path: str, body: Optional[dict] = None,
+                 timeout: Optional[float] = None) -> dict:
         headers = {"User-Agent": "hrm-sdk/" + __version__, "Accept": "application/json"}
         data = None
         if body is not None:
@@ -72,7 +86,9 @@ class Client:
             raise HRMError("invalid server URL %r: must start with http:// or https://" % self.url)
         try:
             req = urllib.request.Request(self.url + path, data=data, headers=headers, method=method)
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(
+                    req, timeout=self.timeout if timeout is None else timeout
+            ) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as e:
             try:
@@ -87,6 +103,8 @@ class Client:
                 "cannot reach %s: %s" % (self.url, e.reason), None) from None
         except (OSError, http.client.HTTPException) as e:  # timeouts, resets mid-read
             raise ServerUnavailable("cannot reach %s: %s" % (self.url, e), None) from None
+        if not raw:
+            return {}        # 204 No Content: nothing happened, and that is an answer
         try:
             parsed = json.loads(raw)
         except ValueError:
@@ -94,6 +112,10 @@ class Client:
         if not isinstance(parsed, dict):
             raise HRMError("server sent unexpected JSON for %s %s" % (method, path))
         return parsed
+
+    def now(self) -> datetime:
+        """This client's idea of now (injectable for tests)."""
+        return self._clock()
 
     # -- read API --------------------------------------------------------
     def users(self) -> List[str]:
@@ -119,6 +141,72 @@ class Client:
         with _shape("/api/claims"):
             found = [Booking.from_json(c) for c in data["claims"]]
         return BookingList(b for b in found if include_cancelled or not b.cancelled)
+
+    def capacity(self, memory: Optional[float] = None, *, hours: float = 1.0,
+                 gpu: Optional[int] = None, count: int = 1) -> Capacity:
+        """What is free now, and when `memory` GiB would next fit for `hours`.
+
+        Ask this instead of summing bookings yourself: the server owns the
+        arithmetic, and clients that reimplemented it got it wrong.
+        """
+        _check_shape(memory, hours, count)
+        query = ["duration_minutes=%d" % max(int(round(hours * 60)), 1),
+                 "count=%d" % count]
+        if memory is not None:
+            query.append("vram_gib=%s" % memory)
+        if gpu is not None:
+            query.append("gpu=%d" % gpu)
+        data = self._request("GET", "/api/capacity?" + "&".join(query))
+        with _shape("/api/capacity"):
+            return Capacity.from_json(data)
+
+    def reserve(self, memory: Optional[float] = None, *, hours: float = 1.0,
+                gpu: Optional[int] = None, count: int = 1,
+                auto_advance: bool = True,
+                not_later_than: Optional[Union[datetime, str]] = None,
+                notice_seconds: Optional[int] = None, important: bool = False,
+                note: Optional[str] = None, user: Optional[str] = None) -> Slot:
+        """Reserve `memory` GiB for `hours`, starting as soon as it fits.
+
+        A full box is not a refusal: the server answers with a window, and
+        `slot.assigned_later` says whether it starts now or later. Wait for it with
+        `slot.wait_until_start()`, and give it back with `slot.release()`.
+
+        It can still raise `Conflict`, and the reason is on `err.extra`: the box's
+        `max_pending_per_user` (how many not-yet-started bookings one person may
+        hold), a `not_later_than` the earliest slot misses, or nothing fitting
+        inside the server's 14-day horizon.
+
+        `notice_seconds=0` promises you will be off the card at once if an important
+        booking wants it -- the server honours that only while a watcher is parked,
+        and it can never buy more notice than the box's grace period.
+        """
+        _check_shape(memory, hours, count)
+        if notice_seconds is not None and (isinstance(notice_seconds, bool)
+                                           or not isinstance(notice_seconds, int)
+                                           or notice_seconds < 0):
+            raise ValueError("notice_seconds must be a whole number of seconds, 0 or "
+                             "more, got %r" % (notice_seconds,))
+        body = {"user": self.resolve_user(user), "count": count,
+                "duration_minutes": max(int(round(hours * 60)), 1),
+                "auto_advance": bool(auto_advance),
+                "priority": "important" if important else "lendable"}
+        if memory is not None:
+            body["vram_gib"] = memory
+        if gpu is not None:
+            body["gpu"] = gpu
+        if note is not None:
+            body["note"] = note
+        if notice_seconds is not None:
+            body["notice_seconds"] = notice_seconds
+        if not_later_than is not None:
+            body["not_later_than"] = _iso(_to_datetime(not_later_than, "not_later_than"))
+        data = self._request("POST", "/api/claims", body)
+        with _shape("/api/claims"):
+            rows = data.get("claims") or [data["claim"]]
+            return Slot(self, [Booking.from_json(c) for c in rows],
+                        bool(data.get("assigned_later", False)),
+                        data.get("revoked"))
 
     # -- user resolution -------------------------------------------------
     def resolve_user(self, explicit: Optional[str] = None) -> str:
@@ -278,6 +366,41 @@ class Client:
         else:
             booking_id = int(booking_or_id)
         return self._post_claim("/api/claims/%d/cancel" % booking_id, {})
+
+    def release_claim(self, booking_or_id: Union[Booking, int],
+                      end: Optional[Union[datetime, str]] = None) -> dict:
+        """Give a booking back: one that has started has its end moved to `end`
+        (default now), so the window it really used stays on the calendar and in
+        the energy ledger; one that has not started is cancelled instead.
+
+        Returns {"claim": Booking|None, "advanced": [...]} -- the slots the server
+        pulled earlier because of this.
+        """
+        booking_id = booking_or_id.id if isinstance(booking_or_id, Booking) \
+            else int(booking_or_id)
+        body = {} if end is None else {"end": _iso(_to_datetime(end, "end"))}
+        data = self._request("POST", "/api/claims/%d/release" % booking_id, body)
+        with _shape("/api/claims/<id>/release"):
+            claim = data.get("claim")
+            return {"claim": None if claim is None else Booking.from_json(claim),
+                    "advanced": list(data.get("advanced") or [])}
+
+    def watch_claim(self, booking_or_id: Union[Booking, int],
+                    timeout: float = 90.0) -> Optional[dict]:
+        """One long-poll on a booking: block until something happens to it.
+
+        Returns the event, or None if the server's hold expired with nothing to say
+        (HTTP 204) -- then call it again. The timeout must exceed the server's hold
+        (60 s), or every call would look like a network failure.
+        """
+        booking_id = booking_or_id.id if isinstance(booking_or_id, Booking) \
+            else int(booking_or_id)
+        # The timeout is passed per request, never stored: this client is shared with
+        # every watcher thread, and a stored 90 s would leak into the main thread's
+        # reserve() and release() -- and two watchers would lose each other's restore.
+        data = self._request("GET", "/api/claims/%d/events" % booking_id,
+                             timeout=timeout)
+        return data or None
 
     def hold(self, gpu: int, user: Optional[str] = None) -> Booking:
         """Quick hold: the whole card from now until the next 09:00 Berlin."""

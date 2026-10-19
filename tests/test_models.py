@@ -110,3 +110,36 @@ def test_to_frame_without_pandas(monkeypatch, usage, bookings):
     assert str(ei.value) == msg
     with pytest.raises(ImportError):
         bookings.to_frame()
+
+
+def test_booking_reads_the_v4_columns():
+    b = Booking.from_json({
+        "id": 7, "user": "alice", "gpu": 4, "vram_mib": 20480,
+        "start": "2026-10-06T12:00:00+00:00", "end": "2026-10-06T13:00:00+00:00",
+        "note": None, "created_at": "2026-10-06T11:00:00+00:00",
+        "created_ip": "192.0.2.10", "cancelled_at": None, "cancelled_ip": None,
+        "kind": "calendar", "priority": "important", "auto_advance": True,
+        "group_id": "abc123", "notice_seconds": 0,
+        "taken": [{"start": "2026-10-06T12:30:00+00:00",
+                   "end": "2026-10-06T13:00:00+00:00",
+                   "vram_mib": 4096, "by": ["duser"]}],
+    })
+    assert b.priority == "important"
+    assert b.auto_advance is True
+    assert b.group_id == "abc123"
+    assert b.notice_seconds == 0
+    assert b.taken[0]["by"] == ["duser"]
+
+
+def test_booking_from_an_older_server_gets_sane_defaults():
+    b = Booking.from_json({
+        "id": 1, "user": "alice", "gpu": 0, "vram_mib": 1024,
+        "start": "2026-10-06T12:00:00+00:00", "end": "2026-10-06T13:00:00+00:00",
+        "note": None, "created_at": "2026-10-06T11:00:00+00:00",
+        "created_ip": None, "cancelled_at": None, "cancelled_ip": None,
+    })
+    assert b.priority == "lendable"
+    assert b.auto_advance is False
+    assert b.group_id is None
+    assert b.notice_seconds is None
+    assert b.taken == ()        # a tuple: Booking is frozen and must stay hashable

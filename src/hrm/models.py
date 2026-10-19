@@ -57,6 +57,14 @@ class Booking:
     cancelled_at: Optional[datetime]
     cancelled_ip: Optional[str]
     kind: str
+    priority: str = "lendable"              # "lendable" or "important"
+    auto_advance: bool = False              # may the server move this booking earlier?
+    group_id: Optional[str] = None          # members of one atomic group share it
+    notice_seconds: Optional[int] = None    # warning its owner needs before losing the card
+    # Where an important booking holds this one's VRAM: {start, end, vram_mib, by}.
+    # A tuple, not a list: Booking is frozen, and a list field would make it
+    # unhashable -- set(bookings) worked before this column existed.
+    taken: Tuple[Dict[str, Any], ...] = ()
 
     @classmethod
     def from_json(cls, d: Dict[str, Any]) -> "Booking":
@@ -73,6 +81,12 @@ class Booking:
             cancelled_at=_opt_time(d.get("cancelled_at")),
             cancelled_ip=d.get("cancelled_ip"),
             kind=d.get("kind", "calendar"),
+            # All five default, so a body from a server that predates schema v4 parses.
+            priority=d.get("priority", "lendable"),
+            auto_advance=bool(d.get("auto_advance", False)),
+            group_id=d.get("group_id"),
+            notice_seconds=d.get("notice_seconds"),
+            taken=tuple(d.get("taken") or ()),
         )
 
     @property
