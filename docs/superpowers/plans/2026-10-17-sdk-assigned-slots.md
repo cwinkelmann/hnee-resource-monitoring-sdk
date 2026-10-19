@@ -108,13 +108,13 @@ def test_booking_reads_the_v4_columns():
         "group_id": "abc123", "notice_seconds": 0,
         "taken": [{"start": "2026-10-06T12:30:00+00:00",
                    "end": "2026-10-06T13:00:00+00:00",
-                   "vram_mib": 4096, "by": ["dorian.zwanzig"]}],
+                   "vram_mib": 4096, "by": ["duser"]}],
     })
     assert b.priority == "important"
     assert b.auto_advance is True
     assert b.group_id == "abc123"
     assert b.notice_seconds == 0
-    assert b.taken[0]["by"] == ["dorian.zwanzig"]
+    assert b.taken[0]["by"] == ["duser"]
 
 
 def test_booking_from_an_older_server_gets_sane_defaults():
@@ -1210,17 +1210,17 @@ def _wait_for(predicate, seconds=5.0):
 def test_a_watched_slot_learns_it_was_taken(client, fake):
     slot = client.reserve(memory=1, hours=1, notice_seconds=0)
     fake.queue_event(slot.id, {"event": "taken", "effective_mib": 0, "lost_mib": 1024,
-                               "by": ["dorian.zwanzig"], "truncated": True,
+                               "by": ["duser"], "truncated": True,
                                "cancelled": False, "deadline": None})
     with slot.watch():
         assert _wait_for(lambda: slot.taken is not None)
-    assert slot.taken["by"] == ["dorian.zwanzig"]
+    assert slot.taken["by"] == ["duser"]
 
 
 def test_check_raises_preempted_once_the_card_is_taken(client, fake):
     slot = client.reserve(memory=1, hours=1, notice_seconds=0)
     fake.queue_event(slot.id, {"event": "taken", "effective_mib": 0, "lost_mib": 1024,
-                               "by": ["dorian.zwanzig"], "truncated": True,
+                               "by": ["duser"], "truncated": True,
                                "cancelled": False, "deadline": None})
     with slot.watch():
         assert _wait_for(lambda: slot.taken is not None)
@@ -1513,7 +1513,7 @@ def test_the_context_manager_releases_even_when_the_body_raises(client, fake):
 def test_preempted_from_check_still_releases_the_slot(client, fake):
     slot = client.reserve(memory=1, hours=4, notice_seconds=0)
     fake.queue_event(slot.id, {"event": "taken", "effective_mib": 0, "lost_mib": 1024,
-                               "by": ["dorian.zwanzig"], "truncated": True,
+                               "by": ["duser"], "truncated": True,
                                "cancelled": False, "deadline": None})
     with pytest.raises(hrm.Preempted):
         with slot:

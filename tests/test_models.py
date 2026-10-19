@@ -122,13 +122,13 @@ def test_booking_reads_the_v4_columns():
         "group_id": "abc123", "notice_seconds": 0,
         "taken": [{"start": "2026-10-06T12:30:00+00:00",
                    "end": "2026-10-06T13:00:00+00:00",
-                   "vram_mib": 4096, "by": ["dorian.zwanzig"]}],
+                   "vram_mib": 4096, "by": ["duser"]}],
     })
     assert b.priority == "important"
     assert b.auto_advance is True
     assert b.group_id == "abc123"
     assert b.notice_seconds == 0
-    assert b.taken[0]["by"] == ["dorian.zwanzig"]
+    assert b.taken[0]["by"] == ["duser"]
 
 
 def test_booking_from_an_older_server_gets_sane_defaults():

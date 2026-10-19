@@ -15,7 +15,7 @@ import hrm
 from hrm.errors import Preempted
 
 TAKEN = {"event": "taken", "effective_mib": 0, "lost_mib": 19968,
-         "by": ["dorian.zwanzig"], "truncated": True, "cancelled": False,
+         "by": ["duser"], "truncated": True, "cancelled": False,
          "deadline": "2026-10-17T10:05:00+00:00"}
 CANCELLED = {"event": "cancelled", "effective_mib": 0, "lost_mib": 19968,
              "by": [], "truncated": False, "cancelled": True, "deadline": None}
@@ -56,7 +56,7 @@ def test_a_watched_slot_learns_it_was_taken(slot, fake):
     fake.script("GET", EVENTS, 200, TAKEN)
     with slot.watch():
         assert _wait_for(lambda: slot.taken is not None)
-    assert slot.taken["by"] == ["dorian.zwanzig"]
+    assert slot.taken["by"] == ["duser"]
     assert slot.taken["truncated"] is True
 
 
@@ -67,7 +67,7 @@ def test_check_raises_preempted_once_the_card_is_taken(slot, fake):
         with pytest.raises(Preempted) as e:
             slot.check()
     assert e.value.event["event"] == "taken"
-    assert "dorian.zwanzig" in str(e.value)
+    assert "duser" in str(e.value)
     assert "GPU 4" in str(e.value)
 
 

@@ -15,7 +15,7 @@ import pytest
 import hrm
 
 TAKEN = {"event": "taken", "effective_mib": 0, "lost_mib": 19968,
-         "by": ["dorian.zwanzig"], "truncated": True, "cancelled": False,
+         "by": ["duser"], "truncated": True, "cancelled": False,
          "deadline": None}
 SLOT_BODY = {
     "claim": {"id": 11, "user": "cwinkelmann", "gpu": 4, "vram_mib": 19968,
@@ -74,7 +74,7 @@ def test_run_reports_what_the_watcher_was_told(slot, fake, tmp_path):
     fake.script("GET", EVENTS, 200, TAKEN)
     import mp_targets
     slot.run(mp_targets.runs_until_stopped, args=(str(tmp_path / "m"), 30.0))
-    assert slot.taken["by"] == ["dorian.zwanzig"]
+    assert slot.taken["by"] == ["duser"]
     with pytest.raises(hrm.Preempted):
         slot.check()
 

@@ -10,7 +10,7 @@ import hrm
 from hrm.slots import Capacity
 
 TAKEN_EVENT = {"event": "taken", "effective_mib": 0, "lost_mib": 19968,
-               "by": ["dorian.zwanzig"], "truncated": True, "cancelled": False,
+               "by": ["duser"], "truncated": True, "cancelled": False,
                "deadline": None}
 CAP_BODY = {"free_mib": 16376, "free_gib": 16.0,
             "earliest": "2026-10-17T07:48:03+00:00", "gpu": 0, "gpus": [0]}
