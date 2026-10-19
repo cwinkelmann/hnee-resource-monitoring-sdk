@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.9+, standard library only (`urllib.request`, `threading`, `json`). pytest with the repo's own `tests/fakeserver.py` in-memory server. PyTorch appears in one example and is never a package dependency.
 
-**Spec:** `/Users/christian/work/ResourceMonitor/docs/superpowers/specs/2026-10-15-assigned-slots-design.md` — the server side of this contract, already implemented and reviewed on `feat/assigned-slots` in that repo. Its "SDK (`hrm`)" and "What a job looks like" sections are what this plan builds.
+**Spec:** `~/work/ResourceMonitor/docs/superpowers/specs/2026-10-15-assigned-slots-design.md` — the server side of this contract, already implemented and reviewed on `feat/assigned-slots` in that repo. Its "SDK (`hrm`)" and "What a job looks like" sections are what this plan builds.
 
 ## Global Constraints
 
@@ -33,7 +33,7 @@ The spec sketches `with hrm.watch(booking): train()` raising `Preempted` inside 
 ## Testing strategy: the real server for the contract, stubs for the rest
 
 **Revised on the user's point, and it is the right one:** t14 runs the real booking server
-(`http://192.168.188.88:8765`, a 16376 MiB RTX 4080 SUPER, confirmed serving
+(`http://192.0.2.10:8765`, a 16376 MiB RTX 4080 SUPER, confirmed serving
 `/api/capacity`). Modelling assigned slots, advancing and revocation a second time inside
 `tests/fakeserver.py` would be ~200 lines duplicating logic that already exists — and when
 the model drifts from the server, the tests pass while the SDK breaks. That is exactly the
@@ -192,7 +192,7 @@ def live():
     """A client against a real booking server, or a skip.
 
     Set HRM_LIVE_URL (and HRM_LIVE_USER if your login differs) to run these:
-        HRM_LIVE_URL=http://192.168.188.88:8765 HRM_LIVE_USER=christian pytest tests/test_live.py
+        HRM_LIVE_URL=http://192.0.2.10:8765 HRM_LIVE_USER=cwinkelmann pytest tests/test_live.py
     """
 ```
 
@@ -206,7 +206,7 @@ budget.
 ```python
 """The contract, against a real booking server. Skipped unless HRM_LIVE_URL is set.
 
-    HRM_LIVE_URL=http://192.168.188.88:8765 HRM_LIVE_USER=christian \
+    HRM_LIVE_URL=http://192.0.2.10:8765 HRM_LIVE_USER=cwinkelmann \
         python -m pytest tests/test_live.py -v
 
 Every test books the smallest slot the server allows and releases it again, so a run
@@ -350,7 +350,7 @@ def test_a_scripted_204_is_sent_without_a_body(fake):
 Run: `PYTHONPATH=src python -m pytest tests/test_fakeserver.py -k scripted_204 -v`
 Expected: FAIL — the handler sends `"null"` as the body, so `r.read()` is `b"null"`.
 
-Run: `HRM_LIVE_URL=http://192.168.188.88:8765 HRM_LIVE_USER=christian PYTHONPATH=src python -m pytest tests/test_live.py -v`
+Run: `HRM_LIVE_URL=http://192.0.2.10:8765 HRM_LIVE_USER=cwinkelmann PYTHONPATH=src python -m pytest tests/test_live.py -v`
 Expected: FAIL — `AttributeError: 'Client' object has no attribute 'capacity'`. Everything
 `tests/test_live.py` needs arrives in Tasks 3–8, so this file stays red until Task 8 and is
 the real gate on the whole plan.

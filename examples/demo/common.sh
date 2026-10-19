@@ -1,12 +1,12 @@
 # Shared setup for the demo scripts. Source it, do not run it.
 #
-#   HRM_URL   the booking server            (default: the t14)
+#   HRM_URL   the booking server            (default: carrot, as in hrm itself)
 #   HRM_USER  your account on that host     (default: $USER)
 #   HRM_PY    the python to use             (default: the hrm-train conda env, then python3)
 #   HRM_GIB   VRAM per booking in GiB       (default: a third of the card, measured below)
 set -u
 
-: "${HRM_URL:=http://192.168.188.88:8765}"
+: "${HRM_URL:=http://10.188.1.1:8765}"
 : "${HRM_USER:=$USER}"
 export HRM_URL HRM_USER
 

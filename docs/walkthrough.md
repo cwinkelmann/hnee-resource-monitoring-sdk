@@ -14,7 +14,7 @@ free one.
 
 ```bash
 cd examples/demo
-HRM_URL=http://192.168.188.88:8765 HRM_USER=christian ./01-queue.sh
+HRM_URL=http://192.0.2.10:8765 HRM_USER=cwinkelmann ./01-queue.sh
 ```
 
 ---
@@ -104,8 +104,8 @@ being interrupted at epoch 31:
 epoch 29  loss 1.0030  4.1s  5.3 GiB on GPU 0
 epoch 30  loss 1.0025  3.9s  5.3 GiB on GPU 0
 epoch 31  loss 1.0026  3.9s  5.3 GiB on GPU 0
-preempted: GPU 0 was taken by christian
-checkpoint is at /home/christian/runs/hrm-preempt/checkpoint.pt; run the same command to carry on
+preempted: GPU 0 was taken by cwinkelmann
+checkpoint is at /home/cwinkelmann/runs/hrm-preempt/checkpoint.pt; run the same command to carry on
 ```
 
 and the same thing from the other side, from `02-preemption.sh`:
@@ -113,8 +113,8 @@ and the same thing from the other side, from `02-preemption.sh`:
 ```
 == Now someone needs the card: an important booking for most of it
    booking 50 placed in 0.04s, starts 10:47:00
-   revoked booking 47 of christian: 5128 MiB lost, truncated=True
-   revoked booking 49 of christian: 6144 MiB lost, truncated=True
+   revoked booking 47 of cwinkelmann: 5128 MiB lost, truncated=True
+   revoked booking 49 of cwinkelmann: 6144 MiB lost, truncated=True
 
 == What the job did about it
    It stops at the next epoch boundary -- the one place a checkpoint is safe.
@@ -221,8 +221,8 @@ among several — it is the ceiling.
 | [`02-preemption.sh`](../examples/demo/02-preemption.sh) | a free GPU and PyTorch | a real training run being preempted, checkpointing and resuming |
 
 ```bash
-export HRM_URL=http://192.168.188.88:8765
-export HRM_USER=christian
+export HRM_URL=http://192.0.2.10:8765
+export HRM_USER=cwinkelmann
 cd examples/demo && ./01-queue.sh && ./02-preemption.sh
 ```
 
@@ -233,6 +233,6 @@ and the demo would otherwise die of CUDA OOM and look like a bug:
 
 ```
    someone is already using the card:
-      GPU 0: christian python train.py, 10572 MiB
+      GPU 0: cwinkelmann python train.py, 10572 MiB
    this demo needs a free card -- it would run out of CUDA memory.
 ```

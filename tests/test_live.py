@@ -1,6 +1,6 @@
 """The contract, against a real booking server. Skipped unless HRM_LIVE_URL is set.
 
-    HRM_LIVE_URL=http://192.168.188.88:8765 HRM_LIVE_USER=christian \
+    HRM_LIVE_URL=http://192.0.2.10:8765 HRM_LIVE_USER=cwinkelmann \
         python -m pytest tests/test_live.py -v
 
 Every test books the smallest slot the server allows and releases it again, so a run
